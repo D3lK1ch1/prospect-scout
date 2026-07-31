@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environment
+.venv/
+
+# Secrets / local config
+.env
+
+# Local database
+*.db
+
+# Local run output (real scraped company data, not sample data)
+reports/
+
+# Personal dev notes — name real companies/sites, or describe unbuilt/
+# in-progress personal strategy not ready to publish. README is the
+# public source of truth; MVP_SPEC.md and SEARCH_PROVIDER_SPEC.md are the
+# public-safe specs. These four stay local only.
+docs/SESSION_NOTE.md
+docs/KNOWN_GAPS.md
+docs/AI_APPROACH_SPEC.md
+docs/ABR_DISCOVERY_SPEC.md
