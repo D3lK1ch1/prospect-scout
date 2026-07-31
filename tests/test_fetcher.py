@@ -1,0 +1,107 @@
+"""Offline tests for Prospect Scout's completed fetch foundation."""
+
+import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest.mock import patch
+
+import httpx
+
+from scout.fetcher import FetchResult, robots_allows
+
+
+class StubClient:
+    def __init__(self, response=None, error=None, responses=None):
+        self.response = response
+        self.error = error
+        self.responses = responses or {}
+        self.urls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def get(self, url):
+        self.urls.append(url)
+        if self.error:
+            raise self.error
+        return self.responses.get(url, self.response)
+
+
+def response(url, status=200, text="", headers=None):
+    """Make an httpx response whose URL can be safely inspected."""
+    return httpx.Response(
+        status,
+        text=text,
+        headers=headers,
+        request=httpx.Request("GET", url),
+    )
+
+
+class RobotsAllowsTests(unittest.TestCase):
+    def test_disallow_rule_is_honoured(self):
+        client = StubClient(response("https://example.test/robots.txt", text="User-agent: *\nDisallow: /private"))
+
+        self.assertFalse(robots_allows("https://example.test/private/a", client))
+        self.assertEqual(client.urls, ["https://example.test/robots.txt"])
+
+    def test_missing_robots_is_treated_as_permission(self):
+        self.assertTrue(robots_allows("https://example.test/a", StubClient(response("https://example.test/robots.txt", 404))))
+
+    def test_robots_network_error_is_treated_as_permission(self):
+        client = StubClient(error=httpx.ConnectError("offline"))
+        self.assertTrue(robots_allows("https://example.test/a", client))
+
+
+class FetchResultTests(unittest.TestCase):
+    def test_ok_requires_html(self):
+        self.assertTrue(FetchResult("https://example.test", html="<html>").ok)
+        self.assertFalse(FetchResult("https://example.test", error="blocked").ok)
+
+    @patch("scout.fetcher.httpx.Client")
+    def test_robots_denial_prevents_page_fetch(self, client_factory):
+        from scout.fetcher import fetch_page
+
+        client = StubClient(response("https://example.test/robots.txt", text="User-agent: *\nDisallow: /"))
+        client_factory.return_value = client
+
+        result = fetch_page("https://example.test/private")
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error, "robots.txt disallows fetching this page")
+        self.assertEqual(client.urls, ["https://example.test/robots.txt"])
+
+    @patch("scout.fetcher.httpx.Client")
+    def test_non_html_response_has_diagnostic_context(self, client_factory):
+        from scout.fetcher import fetch_page
+
+        robots = response("https://example.test/robots.txt", text="User-agent: *\nDisallow:")
+        page = response("https://example.test/file.pdf", headers={"content-type": "application/pdf"})
+        client = StubClient(responses={"https://example.test/robots.txt": robots, "https://example.test/file.pdf": page})
+        client_factory.return_value = client
+
+        result = fetch_page("https://example.test/file.pdf")
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status, 200)
+        self.assertEqual(result.final_url, "https://example.test/file.pdf")
+        self.assertIn("not an HTML page", result.error)
+
+
+class CliTests(unittest.TestCase):
+    def test_invalid_url_fails_before_fetching(self):
+        from scout.__main__ import cmd_audit
+
+        output = StringIO()
+        with patch("scout.__main__.fetch_page") as fetch, redirect_stdout(output):
+            result = cmd_audit("example.test")
+
+        self.assertEqual(result, 1)
+        fetch.assert_not_called()
+        self.assertIn("Include http:// or https://", output.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()

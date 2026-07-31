@@ -1,0 +1,34 @@
+[
+  {
+    "id": "technology",
+    "label": "Technology and digital delivery",
+    "role_terms": ["web developer", "frontend developer", "full stack developer", "full-stack", "software engineer", "technical support", "devops", "data analyst", "ux designer"],
+    "page_terms": ["careers", "jobs", "case studies", "customer stories", "success stories", "our work", "engineering", "blog", "projects", "portfolio"],
+    "fallback_paths": ["/careers", "/jobs", "/case-studies", "/customers", "/projects", "/portfolio"],
+    "opportunity_prompt": "Ask how the organisation currently delivers and maintains its customer-facing digital work; do not assume an open role."
+  },
+  {
+    "id": "marketing",
+    "label": "Marketing and communications",
+    "role_terms": ["marketing coordinator", "marketing manager", "content manager", "content writer", "seo specialist", "social media manager", "communications officer"],
+    "page_terms": ["careers", "jobs", "campaigns", "case studies", "blog", "news", "insights"],
+    "fallback_paths": ["/careers", "/jobs", "/blog", "/case-studies"],
+    "opportunity_prompt": "Ask about campaign, content-publishing, analytics, or customer-communication workflows; do not assume an open role."
+  },
+  {
+    "id": "retail_operations",
+    "label": "Retail and operations",
+    "role_terms": ["retail manager", "store manager", "operations coordinator", "e-commerce manager", "customer service", "merchandiser", "supply chain"],
+    "page_terms": ["careers", "jobs", "stores", "shop", "collections", "our story", "case studies"],
+    "fallback_paths": ["/careers", "/jobs", "/stores", "/shop"],
+    "opportunity_prompt": "Ask about store, e-commerce, fulfilment, or customer-service workflows that may need operational support; do not assume an open role."
+  },
+  {
+    "id": "business_admin",
+    "label": "Business and administration",
+    "role_terms": ["business analyst", "project coordinator", "office manager", "operations manager", "account manager", "administration officer", "executive assistant"],
+    "page_terms": ["careers", "jobs", "services", "case studies", "insights", "about"],
+    "fallback_paths": ["/careers", "/jobs", "/services", "/case-studies"],
+    "opportunity_prompt": "Ask about internal processes, reporting, client administration, or workflow bottlenecks; do not assume an open role."
+  }
+]
