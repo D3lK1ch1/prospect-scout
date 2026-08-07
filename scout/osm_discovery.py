@@ -66,22 +66,68 @@ def geocode_area(city: str, state: str, country: str) -> BoundingBox | None:
         return None
 
 
-# office=* covers general businesses. amenity=library / research_institute are
-# a validated broadening (see docs/KNOWN_GAPS.md #2) with confirmed real hits
-# and small, bounded sitemaps. amenity=university deliberately excluded: real
-# hits too, but sitemaps large enough to be a poor fit for this pipeline.
-_CANDIDATE_TAGS = (
-    ("office", None),
+# Per-profile OSM tag narrowing, confirmed against real OSM tag documentation
+# and live Melbourne Overpass counts (see RESEARCH.md, 2026-08-04 section) -
+# each tuple replaces the old one-size-fits-all `office=*` wildcard for that
+# profile with a bounded set of tag values that actually fit its role terms.
+# Ruled out during that research and deliberately not included: `advertising=*`
+# (tags billboards/signage, not agencies), `craft=*` (dominated by solo
+# tradespeople), `office=government` (a judgment call against the project's
+# stated preference for informal/small companies over large/formal ones).
+_PROFILE_TAGS: dict[str, tuple[tuple[str, str | None], ...]] = {
+    "technology": (
+        ("office", "it"),
+        ("office", "research"),
+        ("office", "engineer"),
+        ("shop", "computer"),
+    ),
+    "marketing": (
+        ("office", "advertising_agency"),
+    ),
+    "retail_operations": (
+        ("shop", "department_store"),
+        ("shop", "trade"),
+        ("shop", "wholesale"),
+    ),
+    "business_admin": (
+        ("office", "company"),
+        ("office", "estate_agent"),
+        ("office", "financial"),
+        ("office", "consulting"),
+        ("office", "ngo"),
+    ),
+}
+# amenity=library / research_institute are a validated broadening (see
+# docs/KNOWN_GAPS.md #2) with confirmed real hits and small, bounded sitemaps.
+# Kept unconditional for every profile rather than technology-only: broadly
+# useful general-purpose finds, not really sector-specific - a judgment call,
+# not a confirmed fact, revisit if it proves noisy. amenity=university
+# deliberately excluded: real hits too, but sitemaps too large for this
+# pipeline.
+_UNIVERSAL_TAGS: tuple[tuple[str, str | None], ...] = (
     ("amenity", "library"),
     ("amenity", "research_institute"),
 )
+# No profile, or a profile id this module doesn't recognise: today's original
+# behaviour, an unfiltered `office=*` wildcard plus the two amenities -
+# nothing regresses for a caller that doesn't pass a profile id.
+_FALLBACK_TAGS: tuple[tuple[str, str | None], ...] = (("office", None),) + _UNIVERSAL_TAGS
 
 
-def query_overpass(bbox: BoundingBox) -> list[dict]:
-    """Query Overpass for offices/libraries/research institutes with a website tag inside bbox. [] on error."""
+def _candidate_tags(profile_id: str | None) -> tuple[tuple[str, str | None], ...]:
+    if profile_id is None or profile_id not in _PROFILE_TAGS:
+        return _FALLBACK_TAGS
+    return _PROFILE_TAGS[profile_id] + _UNIVERSAL_TAGS
+
+
+def query_overpass(bbox: BoundingBox, profile_id: str | None = None) -> list[dict]:
+    """Query Overpass for businesses matching the profile's OSM tags (or the
+    unfiltered office=* fallback when no profile is given) with a website tag
+    inside bbox. [] on error.
+    """
     box = f"{bbox.south},{bbox.west},{bbox.north},{bbox.east}"
     clauses = []
-    for key, value in _CANDIDATE_TAGS:
+    for key, value in _candidate_tags(profile_id):
         tag_filter = f'["{key}"]' if value is None else f'["{key}"="{value}"]'
         for element_type in ("node", "way"):
             for website_tag in ("website", "contact:website"):
@@ -116,9 +162,9 @@ def parse_to_domains(elements: list[dict]) -> list[str]:
     return found
 
 
-def discover_domains(city: str, state: str, country: str) -> list[str]:
+def discover_domains(city: str, state: str, country: str, profile_id: str | None = None) -> list[str]:
     """Same output contract as research.read_domains(): a normalised domain list, from a location instead of a file."""
     bbox = geocode_area(city, state, country)
     if bbox is None:
         return []
-    return parse_to_domains(query_overpass(bbox))
+    return parse_to_domains(query_overpass(bbox, profile_id))

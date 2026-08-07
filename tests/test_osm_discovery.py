@@ -144,7 +144,7 @@ class QueryOverpassTests(unittest.TestCase):
 
     @patch("scout.osm_discovery.time.sleep")
     @patch("scout.osm_discovery.httpx.Client")
-    def test_query_includes_office_library_and_research_institute_not_university(self, client_factory, _sleep):
+    def test_no_profile_falls_back_to_unfiltered_office_plus_amenities_not_university(self, client_factory, _sleep):
         stub = StubClient(json_response("https://overpass-api.de/api/interpreter", method="POST", payload={"elements": []}))
         client_factory.return_value = stub
 
@@ -155,6 +155,59 @@ class QueryOverpassTests(unittest.TestCase):
         self.assertIn('"amenity"="library"', sent_query)
         self.assertIn('"amenity"="research_institute"', sent_query)
         self.assertNotIn("university", sent_query)
+
+    @patch("scout.osm_discovery.time.sleep")
+    @patch("scout.osm_discovery.httpx.Client")
+    def test_unrecognised_profile_also_falls_back_to_unfiltered_office(self, client_factory, _sleep):
+        stub = StubClient(json_response("https://overpass-api.de/api/interpreter", method="POST", payload={"elements": []}))
+        client_factory.return_value = stub
+
+        query_overpass(self.bbox, profile_id="not-a-real-profile")
+
+        sent_query = stub.calls[0][2]
+        self.assertIn('"office"]', sent_query)
+
+    @patch("scout.osm_discovery.time.sleep")
+    @patch("scout.osm_discovery.httpx.Client")
+    def test_technology_profile_narrows_to_its_own_tags_and_amenities(self, client_factory, _sleep):
+        stub = StubClient(json_response("https://overpass-api.de/api/interpreter", method="POST", payload={"elements": []}))
+        client_factory.return_value = stub
+
+        query_overpass(self.bbox, profile_id="technology")
+
+        sent_query = stub.calls[0][2]
+        self.assertIn('"office"="it"', sent_query)
+        self.assertIn('"office"="research"', sent_query)
+        self.assertIn('"shop"="computer"', sent_query)
+        self.assertIn('"amenity"="library"', sent_query)
+        # Narrowed: the unfiltered `["office"]` wildcard (no `=value`) must be gone.
+        self.assertNotIn('"office"]', sent_query)
+
+    @patch("scout.osm_discovery.time.sleep")
+    @patch("scout.osm_discovery.httpx.Client")
+    def test_marketing_profile_uses_advertising_agency_not_the_advertising_key(self, client_factory, _sleep):
+        stub = StubClient(json_response("https://overpass-api.de/api/interpreter", method="POST", payload={"elements": []}))
+        client_factory.return_value = stub
+
+        query_overpass(self.bbox, profile_id="marketing")
+
+        sent_query = stub.calls[0][2]
+        self.assertIn('"office"="advertising_agency"', sent_query)
+        # advertising=* was ruled out (billboards/signage, not agencies) - must
+        # never be sent as a bare `["advertising"]` clause.
+        self.assertNotIn('"advertising"]', sent_query)
+
+    @patch("scout.osm_discovery.time.sleep")
+    @patch("scout.osm_discovery.httpx.Client")
+    def test_business_admin_profile_excludes_government_by_default(self, client_factory, _sleep):
+        stub = StubClient(json_response("https://overpass-api.de/api/interpreter", method="POST", payload={"elements": []}))
+        client_factory.return_value = stub
+
+        query_overpass(self.bbox, profile_id="business_admin")
+
+        sent_query = stub.calls[0][2]
+        self.assertIn('"office"="estate_agent"', sent_query)
+        self.assertNotIn('"office"="government"', sent_query)
 
 
 class ParseToDomainsTests(unittest.TestCase):
@@ -188,10 +241,10 @@ class DiscoverDomainsTests(unittest.TestCase):
         geocode.return_value = BoundingBox(south=-37.825, west=144.95, north=-37.805, east=144.97)
         query.return_value = OVERPASS_FIXTURE["elements"]
 
-        domains = discover_domains("Melbourne", "VIC", "Australia")
+        domains = discover_domains("Melbourne", "VIC", "Australia", "technology")
 
         self.assertIn("https://www.ssw.com.au", domains)
-        query.assert_called_once_with(geocode.return_value)
+        query.assert_called_once_with(geocode.return_value, "technology")
 
     @patch("scout.osm_discovery.query_overpass")
     @patch("scout.osm_discovery.geocode_area")
