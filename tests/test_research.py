@@ -5,9 +5,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scout.fetcher import FetchResult
-from scout.models import ResearchRequest
+from scout.models import CompanyResult, Finding, ResearchRequest
 from scout.reporting import write_report
-from scout.research import _is_job_page, analyse_company, evidence_urls, location_is_verified, matching_roles, normalise_domain, page_text, read_domains, title_artifact_finding
+from scout.research import _is_job_page, _looks_like_msp, _nearest_name, analyse_company, contact_finding, evidence_urls, hidden_need_finding, infer_sector, location_is_verified, matching_roles, normalise_domain, page_text, read_domains, team_page_urls, title_artifact_finding
 from scout.profiles import custom_profile, load_profiles
 
 
@@ -302,3 +302,254 @@ class EvidenceUrlsSitemapIntegrationTests(unittest.TestCase):
         result = evidence_urls("https://acme.test", self.html, self.profile)
 
         self.assertIn("https://acme.test/only-on-page-link", result)
+
+
+class TeamPageUrlsTests(unittest.TestCase):
+    @patch("scout.research.discover_sitemap_pages")
+    def test_sitemap_results_win_when_present(self, discover):
+        discover.return_value = ["https://acme.test/company/leadership"]
+
+        result = team_page_urls("https://acme.test", "<a href='/only-on-page'>Meet the Team</a>")
+
+        self.assertEqual(result, ["https://acme.test/company/leadership"])
+
+    @patch("scout.research.discover_sitemap_pages", return_value=[])
+    def test_falls_back_to_link_scan_then_guessed_paths(self, _discover):
+        result = team_page_urls("https://acme.test", "<a href='/our-people'>About the team</a>")
+
+        self.assertIn("https://acme.test/our-people", result)
+
+    @patch("scout.research.discover_sitemap_pages", return_value=[])
+    def test_no_team_link_falls_back_to_guessed_paths_not_a_crash(self, _discover):
+        result = team_page_urls("https://acme.test", "<a href='/products'>Products</a>")
+
+        self.assertTrue(result)
+        self.assertTrue(all(url.startswith("https://acme.test") for url in result))
+
+
+class NearestNameTests(unittest.TestCase):
+    def test_finds_name_immediately_before_title(self):
+        excerpt = "Meet Jane Doe, our Chief Technology Officer, who leads engineering."
+
+        self.assertEqual(_nearest_name(excerpt, "Chief Technology Officer"), "Jane Doe")
+
+    def test_no_name_shaped_text_returns_none(self):
+        excerpt = "our chief technology officer role is currently vacant"
+
+        self.assertIsNone(_nearest_name(excerpt, "chief technology officer"))
+
+    def test_title_term_itself_is_not_returned_as_the_name(self):
+        excerpt = "Chief Technology Officer - leadership team"
+
+        self.assertIsNone(_nearest_name(excerpt, "Chief Technology Officer"))
+
+    def test_filler_words_immediately_before_the_title_are_not_mistaken_for_a_name(self):
+        # Real bug caught by hand: "Our Head" (article + the title's own first
+        # word "Head") is closer in raw character distance to the title span
+        # than the real name "Priya Nair" is, so a naive nearest-by-distance
+        # pick grabbed "Our Head" instead. The fix requires proper interval
+        # overlap, not just "does the candidate start inside the title span".
+        excerpt = "Our Head of Engineering, Priya Nair, oversees delivery across the team."
+
+        self.assertEqual(_nearest_name(excerpt, "Head of Engineering"), "Priya Nair")
+
+
+class ContactFindingTests(unittest.TestCase):
+    def test_title_with_nearby_name_is_medium_confidence(self):
+        text = "Meet Jane Doe, our CTO, who leads the engineering team."
+
+        finding = contact_finding(text, "https://acme.test/team", ("CTO", "Chief Technology Officer"))
+
+        self.assertIsNotNone(finding)
+        self.assertEqual(finding.kind, "team_contact_signal")
+        self.assertEqual(finding.confidence, "medium")
+        self.assertIn("Jane Doe", finding.suggestion)
+
+    def test_title_without_a_nearby_name_is_low_confidence_not_a_crash(self):
+        text = "We're hiring a CTO to join our leadership team next year."
+
+        finding = contact_finding(text, "https://acme.test/team", ("CTO",))
+
+        self.assertIsNotNone(finding)
+        self.assertEqual(finding.confidence, "low")
+
+    def test_no_title_present_returns_none(self):
+        text = "Our team builds great products together."
+
+        self.assertIsNone(contact_finding(text, "https://acme.test/team", ("CTO", "CIO")))
+
+    def test_director_does_not_false_positive_as_cto(self):
+        # "Director" and "doctor" both literally contain the substring "cto" -
+        # a naive `in` check would wrongly fire here; word-boundary matching
+        # must not.
+        text = "Our Sales Director and Managing Director lead the commercial team."
+
+        self.assertIsNone(contact_finding(text, "https://acme.test/team", ("CTO",)))
+
+
+class ContactFindingIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.request = ResearchRequest("Melbourne", "VIC", "Australia", ("web developer",))
+        patcher = patch("scout.research.discover_sitemap_pages", return_value=[])
+        self.addCleanup(patcher.stop)
+        patcher.start()
+
+    def test_analyse_company_adds_a_contact_finding_from_the_team_page(self):
+        profile = next(profile for profile in load_profiles() if profile.id == "technology")
+        pages = {
+            "https://acme.test": fetched(
+                "https://acme.test",
+                "<p>Melbourne VIC Australia</p><a href='/careers'>Careers</a><a href='/about'>About us</a><p>software platform</p>",
+            ),
+            "https://acme.test/careers": fetched("https://acme.test/careers", "<h1>Web Developer</h1><p>Maintain customer website features.</p>"),
+            "https://acme.test/about": fetched("https://acme.test/about", "<p>Meet Jane Doe, our CTO, who leads engineering.</p>"),
+        }
+
+        result = analyse_company("https://acme.test", self.request, fetch=lambda url: pages.get(url, FetchResult(url, error="not found")), profile=profile)
+
+        contact_findings = [f for f in result.findings if f.kind == "team_contact_signal"]
+        self.assertEqual(len(contact_findings), 1)
+        self.assertIn("Jane Doe", contact_findings[0].suggestion)
+
+    def test_profile_with_no_contact_titles_never_adds_a_contact_finding(self):
+        profile = custom_profile("Custom", ("web developer",), ("careers", "about"), "Ask about the workload.")
+        pages = {
+            "https://acme.test": fetched(
+                "https://acme.test",
+                "<p>Melbourne VIC Australia</p><a href='/about'>About us</a><p>software platform</p>",
+            ),
+            "https://acme.test/about": fetched("https://acme.test/about", "<p>Meet Jane Doe, our CTO, who leads engineering.</p>"),
+        }
+
+        result = analyse_company("https://acme.test", self.request, fetch=lambda url: pages.get(url, FetchResult(url, error="not found")), profile=profile)
+
+        self.assertFalse(any(f.kind == "team_contact_signal" for f in result.findings))
+
+
+class InferSectorMinimumMatchesTests(unittest.TestCase):
+    """Regression for two confirmed real false positives: a public library
+    homepage scored "fashion/retail" on the single word "collection" (a
+    library collection, not a clothing one); an energy company scored
+    "fashion/retail" on the single word "shop". A lone incidental hit should
+    no longer be asserted as a sector fact.
+    """
+
+    def test_a_single_keyword_hit_is_not_enough_to_assert_a_sector(self):
+        self.assertEqual(infer_sector("Browse our library collection online."), "unknown")
+
+    def test_two_keyword_hits_still_assert_a_sector(self):
+        self.assertEqual(infer_sector("Shop our latest fashion collection."), "fashion/retail")
+
+    def test_no_keyword_hits_is_unknown(self):
+        self.assertEqual(infer_sector("A page with no sector-indicating words at all."), "unknown")
+
+
+class HiddenNeedFindingContactAwarenessTests(unittest.TestCase):
+    """hidden_need_finding()'s suggestion now differs by whether a technical
+    contact was already found for the same company, instead of firing blind
+    - the "shouldn't it check for a CTO first?" gap.
+    """
+
+    def setUp(self):
+        self.profile = next(profile for profile in load_profiles() if profile.id == "technology")
+        self.result = CompanyResult(domain="https://acme.test", name="acme.test", sector="technology")
+
+    def test_no_contact_found_states_that_plainly(self):
+        finding = hidden_need_finding(self.result, "https://acme.test", "some real page text", self.profile, contact=None)
+
+        self.assertIn("No evidence of a dedicated technical or leadership role", finding.suggestion)
+
+    def test_contact_found_points_the_suggestion_at_them(self):
+        contact = Finding(
+            kind="team_contact_signal", evidence="...", source_url="https://acme.test/about",
+            confidence="medium", suggestion="Possible contact: Jane Doe (CTO) - verify before reaching out.",
+        )
+
+        finding = hidden_need_finding(self.result, "https://acme.test", "some real page text", self.profile, contact=contact)
+
+        self.assertIn("team contact finding below", finding.suggestion)
+        self.assertNotIn("No evidence of a dedicated technical", finding.suggestion)
+
+
+class MspLanguageSignalTests(unittest.TestCase):
+    """Regression for RESEARCH.md 2026-08-06: confirmed-only MSP phrases
+    (literally quoted from itnetworks.com.au), not extrapolated synonyms.
+    HotDoc is the confirmed real counter-example that must NOT be flagged -
+    a real target company with neither MSP nor engineering language at all.
+    """
+
+    def test_confirmed_msp_phrase_alone_is_flagged(self):
+        self.assertTrue(_looks_like_msp("Our service starts with the strategic insight of a Virtual CIO."))
+
+    def test_a_page_with_neither_signal_is_not_flagged(self):
+        # HotDoc's real careers page shape: culture/values content, no MSP
+        # language, no engineering language either.
+        self.assertFalse(_looks_like_msp("Always be empathetic. We offer a benefits pyramid and great office photos."))
+
+    def test_engineering_language_overrides_an_incidental_msp_mention(self):
+        text = "We used to rely on managed IT support, until we built our own engineering team."
+        self.assertFalse(_looks_like_msp(text))
+
+    def test_hidden_need_finding_flags_confirmed_msp_language(self):
+        profile = next(profile for profile in load_profiles() if profile.id == "technology")
+        result = CompanyResult(domain="https://itnetworks.test", name="itnetworks.test", sector="unknown")
+
+        finding = hidden_need_finding(
+            result, "https://itnetworks.test",
+            "Our service starts with the strategic insight of a Virtual CIO.",
+            profile, contact=None,
+        )
+
+        self.assertIn("IT-services/MSP provider", finding.suggestion)
+
+    def test_hidden_need_finding_does_not_flag_a_real_company_with_neither_signal(self):
+        profile = next(profile for profile in load_profiles() if profile.id == "technology")
+        result = CompanyResult(domain="https://hotdoc.test", name="hotdoc.test", sector="health")
+
+        finding = hidden_need_finding(
+            result, "https://hotdoc.test",
+            "Always be empathetic. We offer a benefits pyramid and great office photos.",
+            profile, contact=None,
+        )
+
+        self.assertNotIn("IT-services/MSP provider", finding.suggestion)
+        self.assertIn("No evidence of a dedicated technical or leadership role", finding.suggestion)
+
+
+class HiddenNeedFindingIntegrationTests(unittest.TestCase):
+    """analyse_company() now discovers the team contact before deciding how
+    to word hidden_need_finding()'s suggestion, instead of only appending a
+    contact finding afterward with no cross-reference.
+    """
+
+    def setUp(self):
+        self.request = ResearchRequest("Melbourne", "VIC", "Australia", ("web developer",))
+        patcher = patch("scout.research.discover_sitemap_pages", return_value=[])
+        self.addCleanup(patcher.stop)
+        patcher.start()
+        self.profile = next(profile for profile in load_profiles() if profile.id == "technology")
+
+    def test_hidden_need_suggestion_references_a_contact_found_on_the_same_site(self):
+        pages = {
+            "https://acme.test": fetched(
+                "https://acme.test",
+                "<p>Melbourne VIC Australia</p><a href='/about'>About us</a>",
+            ),
+            "https://acme.test/about": fetched("https://acme.test/about", "<p>Meet Jane Doe, our CTO, who leads engineering.</p>"),
+        }
+
+        result = analyse_company("https://acme.test", self.request, fetch=lambda url: pages.get(url, FetchResult(url, error="not found")), profile=self.profile)
+
+        need = next(f for f in result.findings if f.kind == "potential_role_related_need")
+        self.assertIn("team contact finding below", need.suggestion)
+        self.assertTrue(any(f.kind == "team_contact_signal" for f in result.findings))
+
+    def test_hidden_need_suggestion_says_so_when_no_contact_exists(self):
+        pages = {
+            "https://acme.test": fetched("https://acme.test", "<p>Melbourne VIC Australia</p>"),
+        }
+
+        result = analyse_company("https://acme.test", self.request, fetch=lambda url: pages.get(url, FetchResult(url, error="not found")), profile=self.profile)
+
+        need = next(f for f in result.findings if f.kind == "potential_role_related_need")
+        self.assertIn("No evidence of a dedicated technical or leadership role", need.suggestion)

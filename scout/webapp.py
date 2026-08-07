@@ -17,13 +17,14 @@ from fastapi.responses import HTMLResponse
 from scout.fetcher import FetchResult, fetch_page
 from scout.models import CompanyResult, Finding, ResearchRequest
 from scout.osm_discovery import discover_domains
+from scout.outreach import suggest_outreach_points
 from scout.profiles import load_profiles, profile_by_id
 from scout.ranking import rank_companies, rank_reason
 from scout.reporting import write_report
 from scout.research import run_research
 
 Fetch = Callable[[str], FetchResult]
-Discover = Callable[[str, str, str], list[str]]
+Discover = Callable[[str, str, str, str | None], list[str]]
 
 # OSM discovery can return well over this many candidates in a dense city;
 # researching all of them still fetches each company's own site sequentially,
@@ -73,11 +74,14 @@ def render_form(error: str | None = None) -> str:
 
 def _render_finding(finding: Finding) -> str:
     url = html.escape(finding.source_url)
+    points = suggest_outreach_points(finding)
+    outreach_html = f'<p><em>Outreach angle:</em> {html.escape(points)}</p>' if points else ""
     return f"""<div class="finding">
       <p><strong>{html.escape(finding.kind.replace('_', ' ').title())}</strong> &middot; confidence: {html.escape(finding.confidence)}</p>
       <p>{html.escape(finding.evidence)}</p>
       <p><a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a></p>
       <p><em>Suggested next step:</em> {html.escape(finding.suggestion)}</p>
+      {outreach_html}
     </div>"""
 
 
@@ -134,7 +138,7 @@ def run_research_form(
     except ValueError as exc:
         return render_form(error=str(exc))
 
-    domains = discover(city, state, country)
+    domains = discover(city, state, country, profile.id)
     if not domains:
         return render_form(error="No businesses with a public website were found near that location via OpenStreetMap. Try a nearby larger town, or double-check the spelling.")
 

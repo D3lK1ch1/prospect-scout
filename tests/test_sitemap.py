@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import httpx
 
+from scout.research import _TEAM_PAGE_KEYWORDS
 from scout.sitemap import discover_sitemap_pages, find_sitemap_urls
 
 SITEMAP_NS = 'xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"'
@@ -264,6 +265,69 @@ class DiscoverSitemapPagesTests(unittest.TestCase):
         result = discover_sitemap_pages("https://example.test")
 
         self.assertEqual(result, ["https://example.test/case-studies/mine"])
+
+
+class WholeWordKeywordMatchingTests(unittest.TestCase):
+    """Regression for a confirmed real false positive: itnetworks.com.au's
+    team-contact discovery treated /blog/how-to-install-microsoft-teams/ as
+    a team/leadership page, because the keyword "team" is a plain substring
+    of "teams" (Microsoft Teams, the product) - a raw `in` check can't tell
+    that apart from a genuine plural. whole_word=True fixes this without
+    touching the default (non-team-page) substring behavior other tests in
+    this file already rely on for deliberately truncated keywords like
+    "success-stor".
+    """
+
+    @patch("scout.sitemap.httpx.Client")
+    def test_team_keyword_does_not_match_an_unrelated_product_name_url(self, client_factory):
+        client_factory.return_value = StubClient({
+            "https://example.test/robots.txt": xml_response(
+                "https://example.test/robots.txt", robots_with_sitemap("https://example.test/sitemap.xml")
+            ),
+            "https://example.test/sitemap.xml": xml_response(
+                "https://example.test/sitemap.xml",
+                urlset("https://example.test/blog/how-to-install-microsoft-teams/"),
+            ),
+        })
+
+        result = discover_sitemap_pages("https://example.test", keywords=_TEAM_PAGE_KEYWORDS, whole_word=True)
+
+        self.assertEqual(result, [])
+
+    @patch("scout.sitemap.httpx.Client")
+    def test_team_keyword_still_matches_a_real_team_page(self, client_factory):
+        client_factory.return_value = StubClient({
+            "https://example.test/robots.txt": xml_response(
+                "https://example.test/robots.txt", robots_with_sitemap("https://example.test/sitemap.xml")
+            ),
+            "https://example.test/sitemap.xml": xml_response(
+                "https://example.test/sitemap.xml",
+                urlset("https://example.test/meet-the-team/", "https://example.test/our-team"),
+            ),
+        })
+
+        result = discover_sitemap_pages("https://example.test", keywords=_TEAM_PAGE_KEYWORDS, whole_word=True)
+
+        self.assertEqual(
+            set(result),
+            {"https://example.test/meet-the-team/", "https://example.test/our-team"},
+        )
+
+    @patch("scout.sitemap.httpx.Client")
+    def test_default_substring_behavior_is_unchanged_for_truncated_keywords(self, client_factory):
+        client_factory.return_value = StubClient({
+            "https://example.test/robots.txt": xml_response(
+                "https://example.test/robots.txt", robots_with_sitemap("https://example.test/sitemap.xml")
+            ),
+            "https://example.test/sitemap.xml": xml_response(
+                "https://example.test/sitemap.xml",
+                urlset("https://example.test/success-stories/client-a"),
+            ),
+        })
+
+        result = discover_sitemap_pages("https://example.test")
+
+        self.assertEqual(result, ["https://example.test/success-stories/client-a"])
 
 
 if __name__ == "__main__":

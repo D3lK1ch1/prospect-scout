@@ -36,7 +36,7 @@ class WebappFormTests(unittest.TestCase):
             ),
         }
         fake_fetch = lambda url: pages.get(url, FetchResult(url, error="not found"))
-        fake_discover = lambda city, state, country: ["https://acme.test"]
+        fake_discover = lambda city, state, country, profile_id: ["https://acme.test"]
 
         with tempfile.TemporaryDirectory() as directory:
             output_path = Path(directory) / "report.md"
@@ -63,7 +63,7 @@ class WebappFormTests(unittest.TestCase):
             country="Nowhereland",
             profile_id="technology",
             roles_input="",
-            discover=lambda city, state, country: [],
+            discover=lambda city, state, country, profile_id: [],
         )
 
         self.assertIn("Prospect Scout research setup", html)
@@ -87,7 +87,7 @@ class WebappFormTests(unittest.TestCase):
                 profile_id="technology",
                 roles_input="",
                 fetch=fake_fetch,
-                discover=lambda city, state, country: discovered,
+                discover=lambda city, state, country, profile_id: discovered,
                 limit=2,
                 output=str(output_path),
             )
@@ -108,7 +108,7 @@ class WebappFormTests(unittest.TestCase):
         fake_fetch = lambda url: pages.get(url, FetchResult(url, error="not found"))
         # Discovery order deliberately puts the weaker candidate first, so a
         # pass only means ranking actually reordered them.
-        fake_discover = lambda city, state, country: ["https://weak.test", "https://strong.test"]
+        fake_discover = lambda city, state, country, profile_id: ["https://weak.test", "https://strong.test"]
 
         with tempfile.TemporaryDirectory() as directory:
             output_path = Path(directory) / "report.md"
@@ -140,7 +140,7 @@ class WebappFormTests(unittest.TestCase):
             ),
         }
         fake_fetch = lambda url: pages.get(url, FetchResult(url, error="not found"))
-        fake_discover = lambda city, state, country: ["https://acme.test"]
+        fake_discover = lambda city, state, country, profile_id: ["https://acme.test"]
 
         with tempfile.TemporaryDirectory() as directory:
             output_path = Path(directory) / "report.md"
@@ -159,6 +159,8 @@ class WebappFormTests(unittest.TestCase):
         self.assertIn("Maintain customer website features", html_out)
         self.assertIn("https://acme.test/careers", html_out)
         self.assertIn("Suggested next step", html_out)
+        self.assertIn("Outreach angle:", html_out)
+        self.assertIn("Maintain customer website features", html_out.split("Outreach angle:")[1][:400])
 
     def test_render_form_escapes_error_text(self):
         html_out = run_research_form(
@@ -167,7 +169,7 @@ class WebappFormTests(unittest.TestCase):
             country="Australia",
             profile_id="<script>alert(1)</script>",
             roles_input="",
-            discover=lambda city, state, country: ["https://acme.test"],
+            discover=lambda city, state, country, profile_id: ["https://acme.test"],
         )
 
         self.assertNotIn("<script>alert(1)</script>", html_out)
@@ -180,7 +182,7 @@ class WebappFormTests(unittest.TestCase):
             country="Australia",
             profile_id="not-a-real-profile",
             roles_input="",
-            discover=lambda city, state, country: ["https://acme.test"],
+            discover=lambda city, state, country, profile_id: ["https://acme.test"],
         )
 
         self.assertIn("Prospect Scout research setup", html)

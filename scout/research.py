@@ -95,6 +95,115 @@ def evidence_urls(base_url: str, html: str, profile: ResearchProfile) -> list[st
     return urls[:5]
 
 
+# Team/about/leadership page discovery, parallel to evidence_urls() but
+# scoped to its own vocabulary instead of a research profile's role/
+# case-study terms - contacts are worth checking regardless of which profile
+# is selected, so this isn't profile-keyed the way OSM's tags now are.
+_TEAM_PAGE_KEYWORDS = ("team", "about", "leadership", "people", "who-we-are", "meet-the-team")
+_TEAM_PAGE_PATHS = ("/team", "/about", "/about-us", "/leadership", "/people")
+
+
+def team_page_urls(base_url: str, html: str) -> list[str]:
+    """Up to 2 candidate team/about/leadership page URLs: sitemap first (same
+    mechanism discover_sitemap_pages() already uses for career/case-study
+    pages, just with team-page keywords), homepage-link scan as fallback.
+    Bounded to 2 - this only needs one real hit, not exhaustive coverage.
+    """
+    sitemap_urls = discover_sitemap_pages(base_url, keywords=_TEAM_PAGE_KEYWORDS, limit=2, whole_word=True)
+    if sitemap_urls:
+        return sitemap_urls
+
+    soup = BeautifulSoup(html, "html.parser")
+    urls: list[str] = []
+    for link in soup.select("a[href]"):
+        label = f"{link.get_text(' ', strip=True)} {link['href']}".lower()
+        if any(word in label for word in _TEAM_PAGE_KEYWORDS):
+            url = urljoin(base_url, link["href"])
+            if urlsplit(url).netloc == urlsplit(base_url).netloc and url not in urls:
+                urls.append(url)
+    for path in _TEAM_PAGE_PATHS:
+        url = urljoin(base_url, path)
+        if url not in urls:
+            urls.append(url)
+    return urls[:2]
+
+
+_NAME_PATTERN = re.compile(r"\b[A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+){1,2}\b")
+
+
+def _nearest_name(excerpt: str, title_term: str) -> str | None:
+    """Best-effort candidate name closest to the matched title within a short
+    excerpt. Deliberately conservative - a capitalised-word-sequence guess,
+    not a claim; the raw excerpt always ships alongside it in the finding so
+    a human can verify or dismiss it, same evidence discipline as
+    text_excerpt() elsewhere in this module. None, not a fabricated guess,
+    when nothing name-shaped is nearby.
+    """
+    title_index = excerpt.lower().find(title_term.lower())
+    if title_index < 0:
+        return None
+    title_end = title_index + len(title_term)
+    candidates: list[tuple[int, str]] = []
+    for match in _NAME_PATTERN.finditer(excerpt):
+        match_end = match.start() + len(match.group())
+        # Proper interval overlap, not just "starts inside the title span":
+        # a capitalised run immediately before the title (e.g. "Our Head" right
+        # before "Head of Engineering") can share the title's own first word
+        # without its *start* falling inside the title span - it must still
+        # be excluded, or the shared word gets mistaken for part of a name.
+        if match.start() < title_end and match_end > title_index:
+            continue
+        # A capitalised run often starts at a sentence boundary ("Meet Jane
+        # Doe, our CTO..." greedily matches "Meet Jane Doe") - the last two
+        # words of the run, right before the comma/title that triggered the
+        # match, are the more reliable name guess than the whole run.
+        words = match.group().split()
+        name = " ".join(words[-2:])
+        if name.lower() == title_term.lower():
+            continue
+        name_start = match.start() + len(match.group()) - len(name)
+        candidates.append((name_start, name))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: abs(item[0] - title_index))[1]
+
+
+def contact_finding(text: str, source_url: str, contact_titles: tuple[str, ...]) -> Finding | None:
+    """A named contact only if the company's own team/about page actually
+    presents one - never guessed, never fetched from a third party. Stops at
+    the first contact_titles match found on the page (one contact is enough
+    for a cold-outreach starting point, not an exhaustive org chart).
+    """
+    lower = text.lower()
+    for title_term in contact_titles:
+        # Word-boundary match, not a raw substring check: short acronyms like
+        # "CTO"/"COO" are real substrings of common unrelated words ("Director"
+        # and "doctor" both literally contain "cto") - the same false-positive
+        # class matching_roles() already guards against for role terms.
+        if not re.search(rf"\b{re.escape(title_term.lower())}\b", lower):
+            continue
+        excerpt = text_excerpt(text, title_term)
+        name = _nearest_name(excerpt, title_term)
+        return Finding(
+            kind="team_contact_signal",
+            evidence=f'"{title_term}" found on this page, near the text: "{excerpt}"',
+            source_url=source_url,
+            confidence="medium" if name else "low",
+            suggestion=(f"Possible contact: {name} ({title_term}) - verify from the excerpt before reaching out; this is a best-effort match, not confirmed."
+                        if name else f"A {title_term} is mentioned on this page, but no nearby name could be confidently identified - open the page directly to find who holds the role."),
+        )
+    return None
+
+
+# Confirmed real false positives at count==1: a public library homepage
+# scored "fashion/retail" on the single word "collection" (a library
+# collection, not a clothing one); an energy company scored "fashion/retail"
+# on the single word "shop". A single incidental keyword hit isn't enough
+# to assert a sector as fact in a report a human is meant to trust - below
+# this floor, infer_sector() reports "unknown" instead of guessing.
+_SECTOR_MIN_MATCHES = 2
+
+
 def infer_sector(text: str) -> str:
     lower = text.lower()
     best = "unknown"
@@ -103,6 +212,8 @@ def infer_sector(text: str) -> str:
         count = sum(term in lower for term in terms)
         if count > best_count:
             best, best_count = sector, count
+    if best_count < _SECTOR_MIN_MATCHES:
+        return "unknown"
     return best
 
 
@@ -170,15 +281,68 @@ def location_is_verified(text: str, request: ResearchRequest, domain: str = "") 
     return _country_satisfied(lower, request.country, domain)
 
 
-def hidden_need_finding(result: CompanyResult, source_url: str, source_text: str, profile: ResearchProfile) -> Finding | None:
+# Literally quoted from itnetworks.com.au's own homepage (RESEARCH.md
+# 2026-08-06, finding (a)(2)) - deliberately not extended with synonyms like
+# "managed service provider" or "IT consulting" that weren't directly quoted
+# this session; confirmed-only, per the project's own evidence discipline.
+_MSP_LANGUAGE_TERMS = ("managed it support", "it help desk", "virtual cio")
+
+# Literally quoted from Culture Amp's careers page in the same session - a
+# confirmed hit here overrides the MSP flag below, so an incidental MSP
+# mention on an otherwise real engineering-team site doesn't get flagged.
+_ENGINEERING_LANGUAGE_TERMS = ("engineering blog", "engineering team")
+
+
+def _looks_like_msp(text: str) -> bool:
+    lower = text.lower()
+    return any(term in lower for term in _MSP_LANGUAGE_TERMS) and not any(
+        term in lower for term in _ENGINEERING_LANGUAGE_TERMS
+    )
+
+
+def hidden_need_finding(
+    result: CompanyResult,
+    source_url: str,
+    source_text: str,
+    profile: ResearchProfile,
+    contact: Finding | None = None,
+) -> Finding | None:
+    """A cautious "no matching role, but maybe still worth asking" finding -
+    reframed by two things the pipeline already knows but previously ignored:
+    whether a team_contact_signal was found for this same company (closes the
+    "shouldn't it check for a CTO first?" gap), and whether the homepage's own
+    language reads like an IT-services/MSP provider rather than a product
+    engineering team (RESEARCH.md 2026-08-06). Deliberately never suppresses
+    the finding either way - a confirmed real counter-example (HotDoc, a
+    genuine target company with zero engineering language on its own careers
+    page) means a hard exclusion would drop real prospects, so this only ever
+    adjusts wording, never hides a company from the report.
+    """
     if not source_text:
         return None
+    parts = []
+    if _looks_like_msp(source_text):
+        parts.append(
+            "This site's own language reads like an IT-services/MSP provider serving other "
+            "businesses (\"managed IT support\"/\"IT help desk\"/\"virtual CIO\"-style phrasing), "
+            "not a company running its own product engineering team - treat this as a weaker lead."
+        )
+    if contact is not None:
+        parts.append(
+            f"{profile.opportunity_prompt} A likely technical contact was already found on "
+            "this site (see the team contact finding below) - consider directing the question to them specifically."
+        )
+    else:
+        parts.append(
+            "No evidence of a dedicated technical or leadership role was found on this site - "
+            f"confirm one exists before assuming a {profile.label.lower()} need here. {profile.opportunity_prompt}"
+        )
     return Finding(
         kind="potential_role_related_need",
         evidence=f"The company site contains public business information consistent with the {result.sector} sector; no matching {profile.label} role was found in scanned pages.",
         source_url=source_url,
         confidence="low",
-        suggestion=profile.opportunity_prompt,
+        suggestion=" ".join(parts),
     )
 
 
@@ -260,14 +424,30 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
                             if is_job_page else "Use this work example to ask how the capability is delivered and maintained; do not assume an open role."),
             ))
 
+    # Discovered before the hidden-need decision below (not just appended
+    # after it) so hidden_need_finding() can reframe its suggestion around
+    # whether a real technical contact was already found here.
+    contact = None
+    if profile.contact_titles:
+        for url in team_page_urls(homepage.final_url or domain, homepage.html or ""):
+            page = fetch(url)
+            if not page.ok:
+                continue
+            contact = contact_finding(page_text(page.html or ""), page.final_url or url, profile.contact_titles)
+            if contact:
+                break
+
     if not result.findings:
-        potential = hidden_need_finding(result, homepage.final_url or domain, home_text, profile)
+        potential = hidden_need_finding(result, homepage.final_url or domain, home_text, profile, contact=contact)
         if potential:
             result.findings.append(potential)
 
     title_finding = title_artifact_finding(extract_title(homepage.html or ""), homepage.final_url or domain)
     if title_finding:
         result.findings.append(title_finding)
+
+    if contact:
+        result.findings.append(contact)
 
     if result.location_verified and result.findings and result.findings[0].confidence != "low":
         result.status = "eligible"

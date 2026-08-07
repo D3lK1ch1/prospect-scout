@@ -8,6 +8,7 @@ company.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urljoin, urlsplit
 from xml.etree import ElementTree as ET
 
@@ -55,7 +56,30 @@ def _sitemaps_from_robots(base_url: str, client: httpx.Client) -> list[str]:
     return found
 
 
-def discover_sitemap_pages(base_url: str, keywords: tuple[str, ...] = SITEMAP_PATH_KEYWORDS, limit: int = 5) -> list[str]:
+def _path_matches(path: str, keywords: tuple[str, ...], whole_word: bool) -> bool:
+    """Substring match by default - deliberately loose so a truncated keyword
+    like "success-stor" still catches "success-story"/"success-stories".
+    `whole_word=True` instead requires a real word/phrase boundary (via `\\b`,
+    same mechanism already used by matching_roles()/contact_finding()) -
+    confirmed real false positive without it: the team-page keyword "team"
+    matched inside "microsoft-teams" (an unrelated product name in a blog
+    URL, not an org-chart "team"), because "teams" is also a lexically valid
+    plural of "team" - a boundary check alone can't tell the two apart, but
+    a *bare* `\\b...\\b` (no plural tolerance, unlike matching_roles()) can:
+    it requires a non-word character (or the URL's start/end) immediately
+    after the keyword, which "teams" fails and "meet-the-team/" satisfies.
+    """
+    if not whole_word:
+        return any(keyword in path for keyword in keywords)
+    return any(re.search(rf"\b{re.escape(keyword)}\b", path) for keyword in keywords)
+
+
+def discover_sitemap_pages(
+    base_url: str,
+    keywords: tuple[str, ...] = SITEMAP_PATH_KEYWORDS,
+    limit: int = 5,
+    whole_word: bool = False,
+) -> list[str]:
     """Up to `limit` same-site URLs from base_url's sitemap(s) matching `keywords`."""
     sitemap_urls = find_sitemap_urls(base_url)
     if not sitemap_urls:
@@ -86,7 +110,7 @@ def discover_sitemap_pages(base_url: str, keywords: tuple[str, ...] = SITEMAP_PA
                     if urlsplit(url).netloc != urlsplit(base_url).netloc:
                         continue  # same-origin guard, matching evidence_urls()'s existing precedent
                     path = urlsplit(url).path.lower()
-                    if any(keyword in path for keyword in keywords):
+                    if _path_matches(path, keywords, whole_word):
                         seen.add(url)
                         matches.append(url)
                         if len(matches) >= limit:
