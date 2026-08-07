@@ -15,6 +15,12 @@ class ResearchProfile:
     page_terms: tuple[str, ...]
     fallback_paths: tuple[str, ...]
     opportunity_prompt: str
+    # Titles worth naming if the company's own team/about page publishes one
+    # (see research.py:contact_finding) - empty means the contacts feature is
+    # silently a no-op for this profile, never a guess. Optional/defaulted so
+    # existing profile data and the Custom UI path (no contacts UI yet) keep
+    # working unchanged.
+    contact_titles: tuple[str, ...] = ()
 
 
 def _profile(data: dict) -> ResearchProfile:
@@ -22,6 +28,7 @@ def _profile(data: dict) -> ResearchProfile:
         id=data["id"], label=data["label"], role_terms=tuple(data["role_terms"]),
         page_terms=tuple(data["page_terms"]), fallback_paths=tuple(data["fallback_paths"]),
         opportunity_prompt=data["opportunity_prompt"],
+        contact_titles=tuple(data.get("contact_titles", [])),
     )
 
 

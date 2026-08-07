@@ -2,10 +2,11 @@
   {
     "id": "technology",
     "label": "Technology and digital delivery",
-    "role_terms": ["web developer", "frontend developer", "full stack developer", "full-stack", "software engineer", "technical support", "devops", "data analyst", "ux designer"],
-    "page_terms": ["careers", "jobs", "case studies", "customer stories", "success stories", "our work", "engineering", "blog", "projects", "portfolio"],
+    "role_terms": ["web developer", "frontend developer", "full stack developer", "full-stack", "software engineer", "technical support", "devops", "data analyst", "ux designer", "cloud engineer", "ai engineer", "ml engineer", "systems engineer"],
+    "page_terms": ["careers", "jobs", "case studies", "customer stories", "success stories", "our work", "engineering", "blog", "projects", "portfolio", "engineering blog", "engineering team"],
     "fallback_paths": ["/careers", "/jobs", "/case-studies", "/customers", "/projects", "/portfolio"],
-    "opportunity_prompt": "Ask how the organisation currently delivers and maintains its customer-facing digital work; do not assume an open role."
+    "opportunity_prompt": "Ask how the organisation currently delivers and maintains its customer-facing digital work; do not assume an open role.",
+    "contact_titles": ["CTO", "Chief Technology Officer", "CIO", "Chief Information Officer", "Head of Engineering", "Engineering Manager", "VP of Engineering", "Technical Director"]
   },
   {
     "id": "marketing",
@@ -13,7 +14,8 @@
     "role_terms": ["marketing coordinator", "marketing manager", "content manager", "content writer", "seo specialist", "social media manager", "communications officer"],
     "page_terms": ["careers", "jobs", "campaigns", "case studies", "blog", "news", "insights"],
     "fallback_paths": ["/careers", "/jobs", "/blog", "/case-studies"],
-    "opportunity_prompt": "Ask about campaign, content-publishing, analytics, or customer-communication workflows; do not assume an open role."
+    "opportunity_prompt": "Ask about campaign, content-publishing, analytics, or customer-communication workflows; do not assume an open role.",
+    "contact_titles": ["CMO", "Chief Marketing Officer", "Head of Marketing", "Marketing Director"]
   },
   {
     "id": "retail_operations",
@@ -21,7 +23,8 @@
     "role_terms": ["retail manager", "store manager", "operations coordinator", "e-commerce manager", "customer service", "merchandiser", "supply chain"],
     "page_terms": ["careers", "jobs", "stores", "shop", "collections", "our story", "case studies"],
     "fallback_paths": ["/careers", "/jobs", "/stores", "/shop"],
-    "opportunity_prompt": "Ask about store, e-commerce, fulfilment, or customer-service workflows that may need operational support; do not assume an open role."
+    "opportunity_prompt": "Ask about store, e-commerce, fulfilment, or customer-service workflows that may need operational support; do not assume an open role.",
+    "contact_titles": ["COO", "Chief Operating Officer", "Head of Operations", "Operations Director"]
   },
   {
     "id": "business_admin",
@@ -29,6 +32,7 @@
     "role_terms": ["business analyst", "project coordinator", "office manager", "operations manager", "account manager", "administration officer", "executive assistant"],
     "page_terms": ["careers", "jobs", "services", "case studies", "insights", "about"],
     "fallback_paths": ["/careers", "/jobs", "/services", "/case-studies"],
-    "opportunity_prompt": "Ask about internal processes, reporting, client administration, or workflow bottlenecks; do not assume an open role."
+    "opportunity_prompt": "Ask about internal processes, reporting, client administration, or workflow bottlenecks; do not assume an open role.",
+    "contact_titles": ["COO", "Chief Operating Officer", "CFO", "Chief Financial Officer", "Head of Operations", "Office Manager"]
   }
 ]
