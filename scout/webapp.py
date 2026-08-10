@@ -4,6 +4,12 @@ Wraps run_research()/write_report() exactly as __main__.py's cmd_research() does
 no new business logic lives here. Candidate companies come from the OSM adapter
 (discover_domains) rather than a supplied domain-list file — city/state/country
 are enough to run a search.
+
+Scoped to the `technology` profile only — the other profiles in
+scout/profiles.json (marketing, retail_operations, business_admin) exist for
+the CLI's --profile flag but aren't offered here, to keep the one entry point
+this project is actively developing focused. run_research_form() still takes
+profile_id as a parameter so it stays directly testable against any profile.
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from scout.fetcher import FetchResult, fetch_page
 from scout.models import CompanyResult, Finding, ResearchRequest
 from scout.osm_discovery import discover_domains
 from scout.outreach import suggest_outreach_points
-from scout.profiles import load_profiles, profile_by_id
+from scout.profiles import profile_by_id
 from scout.ranking import rank_companies, rank_reason
 from scout.reporting import write_report
 from scout.research import run_research
@@ -51,20 +57,19 @@ body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; 
 
 
 def render_form(error: str | None = None) -> str:
-    options = "\n".join(f'<option value="{html.escape(p.id)}">{html.escape(p.label)}</option>' for p in load_profiles())
     error_html = f'<p style="color:#b00020">{html.escape(error)}</p>' if error else ""
     return f"""<!doctype html>
 <html>
 <head><title>Prospect Scout</title><style>{_STYLE}</style></head>
 <body>
 <h1>Prospect Scout research setup</h1>
+<p>Focus: Technology and digital delivery roles.</p>
 {error_html}
 <form method="post" action="/research">
   <p><label>City <input name="city" required></label></p>
   <p><label>State/region <input name="state" required></label></p>
   <p><label>Country <input name="country" required></label></p>
-  <p><label>Focus profile <select name="profile">{options}</select></label></p>
-  <p><label>Roles/interests (comma-separated; blank uses the focus's own terms)
+  <p><label>Roles/interests (comma-separated; blank uses the default technology terms)
     <input name="roles"></label></p>
   <p><button type="submit">Run research</button></p>
 </form>
@@ -161,7 +166,6 @@ def research(
     city: str = Form(...),
     state: str = Form(...),
     country: str = Form(...),
-    profile: str = Form("technology"),
     roles: str = Form(""),
 ) -> str:
-    return run_research_form(city, state, country, profile, roles)
+    return run_research_form(city, state, country, "technology", roles)

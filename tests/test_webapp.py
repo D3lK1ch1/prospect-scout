@@ -15,13 +15,15 @@ def fetched(url: str, html: str) -> FetchResult:
 
 
 class WebappFormTests(unittest.TestCase):
-    def test_index_lists_every_profile(self):
+    def test_index_is_technology_only(self):
         client = TestClient(app)
         response = client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        for profile in load_profiles():
-            self.assertIn(profile.label, response.text)
+        other_profiles = [p for p in load_profiles() if p.id != "technology"]
+        self.assertTrue(other_profiles, "fixture expectation: profiles.json still defines non-technology profiles")
+        for profile in other_profiles:
+            self.assertNotIn(profile.label, response.text)
 
     @patch("scout.research.discover_sitemap_pages", return_value=[])
     def test_run_research_form_reports_eligible_company(self, _sitemap_discovery):
