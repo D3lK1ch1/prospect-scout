@@ -3,6 +3,78 @@
 Notable changes to this project. Dated, not version-numbered — nothing's
 been tagged or released yet.
 
+## 2026-08-11 — Web app narrowed to the technology profile
+
+### Changed
+
+- `scout/webapp.py` — removed the focus-profile dropdown from the web form;
+  every web-app search now runs as the `technology` profile. `run_research_form()`
+  is unchanged and still accepts any `profile_id` directly, so it stays fully
+  testable against other profiles. The CLI (`python -m scout`) is unaffected
+  — it still offers every profile in `scout/profiles.json`, including Custom.
+- `README.md` updated to match.
+
+### Fixed
+
+- `tests/test_webapp.py` — replaced `test_index_lists_every_profile`
+  (asserted the old, now-wrong behavior) with `test_index_is_technology_only`
+  (asserts non-technology profile labels are absent from the index page).
+
+## 2026-08-11 — ATS job-board lookup adapter (built, deliberately left unwired)
+
+### Added
+
+- `scout/ats_discovery.py` — public Greenhouse/Lever job-board JSON lookup
+  (`find_ats_jobs()`). Verifies/enriches a company name or domain already in
+  hand, the same role ABR plays for business-registration evidence — not a
+  discovery adapter.
+- `tests/test_ats_discovery.py` — fixture-based coverage, no live network calls.
+
+Deliberately not wired into `run_research()`. Recorded decision
+(`docs/SESSION_NOTE.md`): "deprioritized, not rejected" — Greenhouse/
+Lever-hosted companies skew toward funded/scaled employers, the opposite of
+the informal/small-company profile this project prioritizes.
+
+## 2026-08-11 — Platform-detection and broken-link signals
+
+### Added
+
+- Platform-detection signal (`scout/research.py`, `detect_platform_signal()`)
+  — flags Shopify/Squarespace via confirmed literal fingerprints in fetched
+  homepage HTML (`cdn.shopify.com`, "this is Squarespace"), high confidence.
+  Closes `docs/KNOWN_GAPS.md` #5. BigCommerce's previously-confirmed
+  reference site is now behind Cloudflare bot protection and was left out
+  rather than shipped from an unconfirmed pattern.
+- Broken-link signal (`scout/research.py`) — a career/case-study/blog URL
+  sourced from the company's own sitemap or homepage links that fails to
+  fetch is now surfaced as low-confidence evidence. Deliberately excludes
+  this project's own guessed `fallback_paths` from the check, since a wrong
+  guess by this tool isn't evidence about the company's site.
+- `_KIND_POINTERS` in `scout/outreach.py` gained entries for both new finding
+  kinds (`broken_link_signal`, `platform_detected`).
+
+Both signals are purely additive — neither can flip a company's eligibility
+status or take the `findings[0]` slot from a real role match.
+
+## 2026-08-11 — Research log and build-log case study
+
+### Added
+
+- `RESEARCH.md` — four dated research sessions: Melbourne/VIC blind-discovery
+  mechanisms (AAGE, career fairs, government registers, ASX, industry
+  bodies), OSM tag-mapping plus a second non-overlapping coverage-gap pass,
+  MSP/IT-support noise in the technology profile (role/page-term language,
+  technical-leadership signals, cold-outreach framing) with a BHP addendum,
+  and a Ferocia case check (team-page absence, CTO discoverability, a
+  private-event search blind spot).
+- `docs/case-study.html` — a self-contained build-log/case-file page
+  documenting this project's own evidence discipline: a live sample finding,
+  a dated build log, three real bugs found by running the tool against real
+  companies, the evidence contract, and an open ledger of known limitations.
+
+This entry, plus the three above it, catch this file up to code and research
+that was already sitting in the working tree uncommitted.
+
 ## 2026-08-07 — profile-aware discovery, team-contact extraction, evidence-grounded outreach guidance
 
 ### Added
