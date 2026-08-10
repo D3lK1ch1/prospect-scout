@@ -7,7 +7,7 @@ from unittest.mock import patch
 from scout.fetcher import FetchResult
 from scout.models import CompanyResult, Finding, ResearchRequest
 from scout.reporting import write_report
-from scout.research import _is_job_page, _looks_like_msp, _nearest_name, analyse_company, contact_finding, evidence_urls, hidden_need_finding, infer_sector, location_is_verified, matching_roles, normalise_domain, page_text, read_domains, team_page_urls, title_artifact_finding
+from scout.research import _is_job_page, _looks_like_msp, _nearest_name, analyse_company, contact_finding, detect_platform_signal, evidence_urls, hidden_need_finding, infer_sector, location_is_verified, matching_roles, normalise_domain, page_text, read_domains, team_page_urls, title_artifact_finding
 from scout.profiles import custom_profile, load_profiles
 
 
@@ -469,6 +469,97 @@ class HiddenNeedFindingContactAwarenessTests(unittest.TestCase):
 
         self.assertIn("team contact finding below", finding.suggestion)
         self.assertNotIn("No evidence of a dedicated technical", finding.suggestion)
+
+
+class DetectPlatformSignalTests(unittest.TestCase):
+    """Confirmed live this session against thesocialstudio.org (Shopify) and
+    corporate2contract.com (Squarespace) - both markers are literal
+    substrings actually seen on those real, fetched pages.
+    """
+
+    def test_shopify_marker_is_detected(self):
+        html = '<link rel="preconnect" href="https://cdn.shopify.com" crossorigin>'
+
+        finding = detect_platform_signal("https://acme.test", html)
+
+        self.assertIsNotNone(finding)
+        self.assertEqual(finding.kind, "platform_detected")
+        self.assertIn("Shopify", finding.suggestion)
+        self.assertEqual(finding.confidence, "high")
+
+    def test_squarespace_marker_is_detected(self):
+        html = "<!-- This is Squarespace. --><base href=''>"
+
+        finding = detect_platform_signal("https://acme.test", html)
+
+        self.assertIsNotNone(finding)
+        self.assertIn("Squarespace", finding.suggestion)
+
+    def test_ordinary_site_is_not_flagged(self):
+        html = "<p>We build custom software for clients.</p>"
+
+        self.assertIsNone(detect_platform_signal("https://acme.test", html))
+
+
+class BrokenLinkSignalTests(unittest.TestCase):
+    def setUp(self):
+        self.request = ResearchRequest("Melbourne", "VIC", "Australia", ("web developer",))
+        self.profile = next(profile for profile in load_profiles() if profile.id == "technology")
+
+    @patch("scout.research.discover_sitemap_pages")
+    def test_a_sitemap_sourced_broken_link_is_surfaced(self, discover):
+        # A URL the company's own sitemap declared, that 404s - real evidence.
+        discover.return_value = ["https://acme.test/case-studies/old-page"]
+        pages = {
+            "https://acme.test": fetched("https://acme.test", "<p>Melbourne VIC Australia</p>"),
+        }
+
+        result = analyse_company(
+            "https://acme.test", self.request,
+            fetch=lambda url: pages.get(url, FetchResult(url, error="404 not found")),
+            profile=self.profile,
+        )
+
+        broken = [f for f in result.findings if f.kind == "broken_link_signal"]
+        self.assertEqual(len(broken), 1)
+        self.assertIn("https://acme.test/case-studies/old-page", broken[0].source_url)
+
+    @patch("scout.research.discover_sitemap_pages", return_value=[])
+    def test_a_guessed_fallback_path_that_404s_is_not_flagged(self, _discover):
+        # No sitemap, no matching link on the homepage - evidence_urls() falls
+        # back to guessing profile.fallback_paths. A guess being wrong is not
+        # evidence about the company's own site.
+        pages = {
+            "https://acme.test": fetched("https://acme.test", "<p>Melbourne VIC Australia</p>"),
+        }
+
+        result = analyse_company(
+            "https://acme.test", self.request,
+            fetch=lambda url: pages.get(url, FetchResult(url, error="404 not found")),
+            profile=self.profile,
+        )
+
+        self.assertFalse(any(f.kind == "broken_link_signal" for f in result.findings))
+
+    @patch("scout.research.discover_sitemap_pages")
+    def test_broken_link_never_takes_the_findings_zero_slot(self, discover):
+        # A real role finding must still win first slot and decide
+        # eligibility, even when a broken link was also found.
+        discover.return_value = ["https://acme.test/careers", "https://acme.test/case-studies/dead"]
+        pages = {
+            "https://acme.test": fetched("https://acme.test", "<p>Melbourne VIC Australia</p>"),
+            "https://acme.test/careers": fetched("https://acme.test/careers", "<h1>Web Developer</h1><p>Maintain customer website features.</p>"),
+        }
+
+        result = analyse_company(
+            "https://acme.test", self.request,
+            fetch=lambda url: pages.get(url, FetchResult(url, error="404 not found")),
+            profile=self.profile,
+        )
+
+        self.assertEqual(result.findings[0].kind, "advertised_role_signal")
+        self.assertEqual(result.status, "eligible")
+        self.assertTrue(any(f.kind == "broken_link_signal" for f in result.findings))
 
 
 class MspLanguageSignalTests(unittest.TestCase):

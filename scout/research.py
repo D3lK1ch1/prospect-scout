@@ -230,8 +230,7 @@ def matching_roles(text: str, role_terms: tuple[str, ...]) -> list[str]:
 
 
 # Australia-only for now since it's the only country exercised by real runs so
-# far; extend with more countries' state names as they come up (see
-# docs/KNOWN_GAPS.md), not by building a general geo database up front.
+# far; extend with more countries' state names as they come up, not by building a general geo database up front.
 _AU_STATE_NAMES = {
     "vic": "victoria", "nsw": "new south wales", "qld": "queensland",
     "wa": "western australia", "sa": "south australia", "tas": "tasmania",
@@ -281,8 +280,7 @@ def location_is_verified(text: str, request: ResearchRequest, domain: str = "") 
     return _country_satisfied(lower, request.country, domain)
 
 
-# Literally quoted from itnetworks.com.au's own homepage (RESEARCH.md
-# 2026-08-06, finding (a)(2)) - deliberately not extended with synonyms like
+# Literally quoted from itnetworks.com.au's own homepage (deliberately not extended with synonyms like
 # "managed service provider" or "IT consulting" that weren't directly quoted
 # this session; confirmed-only, per the project's own evidence discipline.
 _MSP_LANGUAGE_TERMS = ("managed it support", "it help desk", "virtual cio")
@@ -381,13 +379,45 @@ def title_artifact_finding(title_text: str, source_url: str) -> Finding | None:
 # (student/general career-info content, not a vacancy listing) would also
 # match a bare "career" substring. Confirmed real false positive: an
 # education-sector "students/career-development" page previously counted as
-# an advertised role. See docs/KNOWN_GAPS.md.
+# an advertised role.
 _JOB_PAGE_KEYWORDS = ("careers", "jobs", "vacancies", "hiring", "recruitment")
 
 
 def _is_job_page(url: str) -> bool:
     lower = url.lower()
     return any(word in lower for word in _JOB_PAGE_KEYWORDS)
+
+
+# Confirmed live this session against the two reference sites that were still reachable: 
+# thesocialstudio.org (Shopify) and corporate2contract.com (Squarespace) - 
+# both fingerprints are literal substrings found directly on the fetched homepage HTML, 
+# no extra fetchneeded. BigCommerce's previously-confirmed reference (bettermerch.com.au)
+# is now behind Cloudflare bot protection and couldn't be re-verified this
+# session, so it's deliberately left out rather than shipped from a stale, unconfirmed pattern
+_PLATFORM_MARKERS = (
+    ("Shopify", "cdn.shopify.com"),
+    ("Squarespace", "this is squarespace"),
+)
+
+
+def detect_platform_signal(source_url: str, html: str) -> Finding | None:
+    """A templated e-commerce platform, detected from a confirmed literal
+    fingerprint already present in the fetched homepage HTML - a real signal
+    for whether a company is a plausible custom-dev target, not a claim
+    about whether they need anything.
+    """
+    lower = html.lower()
+    for platform, marker in _PLATFORM_MARKERS:
+        if marker in lower:
+            return Finding(
+                kind="platform_detected",
+                evidence=f'Homepage HTML contains a confirmed {platform} fingerprint ("{marker}").',
+                source_url=source_url,
+                confidence="high",
+                suggestion=(f"Runs on {platform}, a templated platform - may indicate limited in-house "
+                            "custom engineering capacity; treat this as a hypothesis to ask about, not a certainty."),
+            )
+    return None
 
 
 def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_page, profile: ResearchProfile | None = None) -> CompanyResult:
@@ -406,10 +436,26 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
     if not result.location_verified:
         result.limitations.append("Requested city/state/country was not verified on the fetched homepage.")
 
+    # Our own guessed fallback paths (profile.fallback_paths) must never be
+    # reported as "a broken link on this site" if they 404 - that's our
+    # guess being wrong, not evidence about the company. Only a URL that
+    # came from the company's own sitemap or an actual <a href> on their
+    # homepage (i.e. not an exact match to one of our guesses) counts.
+    guessed_paths = {urljoin(homepage.final_url or domain, path) for path in profile.fallback_paths}
+    broken_links: list[Finding] = []
+
     all_terms = tuple(dict.fromkeys((*profile.role_terms, *request.roles)))
     for url in evidence_urls(homepage.final_url or domain, homepage.html or "", profile):
         page = fetch(url)
         if not page.ok:
+            if url not in guessed_paths:
+                broken_links.append(Finding(
+                    kind="broken_link_signal",
+                    evidence=f"A link found via this site's own sitemap or homepage failed to load: {url} ({page.error}).",
+                    source_url=url,
+                    confidence="low",
+                    suggestion="Confirm this is a genuine dead link (not a transient fetch issue) before mentioning it - a real broken link on a public site is a small, low-pressure, evidence-based opener.",
+                ))
             continue
         text = page_text(page.html or "")
         roles = matching_roles(text, all_terms)
@@ -451,6 +497,14 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
 
     if result.location_verified and result.findings and result.findings[0].confidence != "low":
         result.status = "eligible"
+
+    # Both purely additive, after eligibility is already decided: neither a
+    # broken link nor a detected platform should be able to flip a company's
+    # status or push a low-confidence note into result.findings[0]'s slot.
+    result.findings.extend(broken_links)
+    platform_finding = detect_platform_signal(homepage.final_url or domain, homepage.html or "")
+    if platform_finding:
+        result.findings.append(platform_finding)
     return result
 
 

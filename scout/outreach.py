@@ -24,6 +24,8 @@ _KIND_POINTERS = {
     "advertised_role_signal": "Mention the specific role at {source_url}",
     "case_study_role_signal": "Mention the specific work described at {source_url}",
     "seo_metadata_gap": "Mention the specific detail found at {source_url}",
+    "broken_link_signal": "Mention the specific broken link at {source_url}",
+    "platform_detected": "Mention the specific platform detail found at {source_url}",
 }
 
 _KIND_FRAMING = (
