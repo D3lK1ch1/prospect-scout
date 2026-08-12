@@ -13,9 +13,13 @@ class ResearchRequest:
     country: str
     roles: tuple[str, ...]
     profile: str = "technology"
+    # False for the specific-company path (scout inspect / webapp /inspect):
+    # the human already knows and chose this company, so there is nothing to
+    # verify - city/state/country may be blank and no location check runs.
+    location_required: bool = True
 
     def __post_init__(self) -> None:
-        if not all((self.city.strip(), self.state.strip(), self.country.strip())):
+        if self.location_required and not all((self.city.strip(), self.state.strip(), self.country.strip())):
             raise ValueError("city, state, and country are all required")
         if not self.roles or not any(role.strip() for role in self.roles):
             raise ValueError("at least one role or technical interest is required")
@@ -37,6 +41,10 @@ class CompanyResult:
     status: str = "needs_review"
     sector: str = "unknown"
     location_verified: bool = False
+    # False whenever the request behind this result had location_required=False
+    # (specific-company mode) - lets ranking/reporting/webapp say "skipped"
+    # instead of misreporting an unattempted check as a failed one.
+    location_checked: bool = True
     findings: list[Finding] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
 

@@ -15,16 +15,26 @@ def write_report(report: ResearchReport, output: str) -> tuple[Path, Path]:
     json_path = markdown_path.with_suffix(".json")
     json_path.write_text(json.dumps(report.as_dict(), indent=2), encoding="utf-8")
 
+    location_line = (
+        f"Location requested: {report.request.city}, {report.request.state}, {report.request.country}"
+        if report.request.location_required
+        else "Location requested: none - specific-company mode, location check skipped"
+    )
     lines = [
         "# Prospect Scout report",
         "",
-        f"Location requested: {report.request.city}, {report.request.state}, {report.request.country}",
+        location_line,
         f"Roles/interests: {', '.join(report.request.roles)}",
         f"Generated: {report.created_at}",
         "",
     ]
     for company in report.companies:
-        lines.extend([f"## {company.name}", "", f"Status: **{company.status}**  ", f"Sector: {company.sector}  ", f"Location verified: {'yes' if company.location_verified else 'no'}", ""])
+        location_status = (
+            ("yes" if company.location_verified else "no")
+            if company.location_checked
+            else "skipped (specific-company mode)"
+        )
+        lines.extend([f"## {company.name}", "", f"Status: **{company.status}**  ", f"Sector: {company.sector}  ", f"Location verified: {location_status}", ""])
         for finding in company.findings:
             lines.extend([f"### {finding.kind.replace('_', ' ').title()}", "", f"Evidence: {finding.evidence}", "", f"Source: {finding.source_url}", "", f"Confidence: {finding.confidence}", "", f"Suggested next step: {finding.suggestion}", ""])
             points = suggest_outreach_points(finding)

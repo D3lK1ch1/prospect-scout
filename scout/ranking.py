@@ -21,16 +21,22 @@ def _evidence_score(company: CompanyResult) -> int:
 
 
 def rank_key(company: CompanyResult) -> tuple[int, int, int]:
+    # A skipped check (specific-company mode) isn't a location failure - don't
+    # let it sink below companies that were actually checked and failed.
+    location_component = 1 if (company.location_verified or not company.location_checked) else 0
     return (
         _STATUS_RANK.get(company.status, 0),
-        1 if company.location_verified else 0,
+        location_component,
         _evidence_score(company),
     )
 
 
 def rank_reason(company: CompanyResult) -> str:
     """Human-readable component reasons behind a company's rank position."""
-    parts = ["location verified" if company.location_verified else "location not verified"]
+    if not company.location_checked:
+        parts = ["location check skipped (specific-company mode)"]
+    else:
+        parts = ["location verified" if company.location_verified else "location not verified"]
     high = sum(1 for finding in company.findings if finding.confidence == "high")
     other = len(company.findings) - high
     if high:

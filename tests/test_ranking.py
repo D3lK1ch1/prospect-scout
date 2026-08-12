@@ -4,8 +4,8 @@ from scout.models import CompanyResult, Finding
 from scout.ranking import rank_companies, rank_reason
 
 
-def company(name, status="needs_review", location_verified=False, findings=None) -> CompanyResult:
-    return CompanyResult(domain=f"https://{name}", name=name, status=status, location_verified=location_verified, findings=findings or [])
+def company(name, status="needs_review", location_verified=False, location_checked=True, findings=None) -> CompanyResult:
+    return CompanyResult(domain=f"https://{name}", name=name, status=status, location_verified=location_verified, location_checked=location_checked, findings=findings or [])
 
 
 def finding(confidence: str) -> Finding:
@@ -59,6 +59,22 @@ class RankReasonTests(unittest.TestCase):
 
     def test_no_findings_is_stated_plainly(self):
         self.assertIn("no findings", rank_reason(company("acme")))
+
+    def test_skipped_location_check_says_so_instead_of_claiming_failure(self):
+        reason = rank_reason(company("acme", location_checked=False))
+
+        self.assertIn("location check skipped", reason)
+        self.assertNotIn("location not verified", reason)
+
+
+class RankKeyLocationSkipTests(unittest.TestCase):
+    def test_skipped_check_does_not_rank_below_a_genuine_location_failure(self):
+        failed_check = company("failed", status="eligible", location_verified=False, location_checked=True)
+        skipped_check = company("skipped", status="eligible", location_verified=False, location_checked=False)
+
+        ranked = rank_companies([failed_check, skipped_check])
+
+        self.assertEqual([c.name for c in ranked], ["skipped", "failed"])
 
 
 if __name__ == "__main__":
