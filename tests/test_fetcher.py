@@ -102,6 +102,21 @@ class CliTests(unittest.TestCase):
         fetch.assert_not_called()
         self.assertIn("Include http:// or https://", output.getvalue())
 
+    def test_inspect_invalid_url_fails_before_fetching(self):
+        from argparse import Namespace
+
+        from scout.__main__ import cmd_inspect
+
+        args = Namespace(domain="known.test", role=[], profile="technology", profile_name=None, page_term=[], opportunity_prompt=None, output="reports/x.md")
+
+        output = StringIO()
+        with patch("scout.research.fetch_page") as fetch, redirect_stdout(output):
+            result = cmd_inspect(args)
+
+        self.assertEqual(result, 1)
+        fetch.assert_not_called()
+        self.assertIn("Include http:// or https://", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

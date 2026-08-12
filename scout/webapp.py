@@ -21,13 +21,13 @@ from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse
 
 from scout.fetcher import FetchResult, fetch_page
-from scout.models import CompanyResult, Finding, ResearchRequest
+from scout.models import CompanyResult, Finding, ResearchReport, ResearchRequest
 from scout.osm_discovery import discover_domains
 from scout.outreach import suggest_outreach_points
 from scout.profiles import profile_by_id
 from scout.ranking import rank_companies, rank_reason
 from scout.reporting import write_report
-from scout.research import run_research
+from scout.research import analyse_company, run_research
 
 Fetch = Callable[[str], FetchResult]
 Discover = Callable[[str, str, str, str | None], list[str]]
@@ -56,6 +56,10 @@ body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; 
 """
 
 
+_MODE_NAV = '<p><strong>Widespread search</strong> &middot; <a href="/inspect">Specific company</a></p>'
+_MODE_NAV_INSPECT = '<p><a href="/">Widespread search</a> &middot; <strong>Specific company</strong></p>'
+
+
 def render_form(error: str | None = None) -> str:
     error_html = f'<p style="color:#b00020">{html.escape(error)}</p>' if error else ""
     return f"""<!doctype html>
@@ -63,6 +67,7 @@ def render_form(error: str | None = None) -> str:
 <head><title>Prospect Scout</title><style>{_STYLE}</style></head>
 <body>
 <h1>Prospect Scout research setup</h1>
+{_MODE_NAV}
 <p>Focus: Technology and digital delivery roles.</p>
 {error_html}
 <form method="post" action="/research">
@@ -72,6 +77,26 @@ def render_form(error: str | None = None) -> str:
   <p><label>Roles/interests (comma-separated; blank uses the default technology terms)
     <input name="roles"></label></p>
   <p><button type="submit">Run research</button></p>
+</form>
+</body>
+</html>"""
+
+
+def render_inspect_form(error: str | None = None) -> str:
+    error_html = f'<p style="color:#b00020">{html.escape(error)}</p>' if error else ""
+    return f"""<!doctype html>
+<html>
+<head><title>Prospect Scout — specific company</title><style>{_STYLE}</style></head>
+<body>
+<h1>Prospect Scout — specific company</h1>
+{_MODE_NAV_INSPECT}
+<p>Already know the company? This skips location discovery and the location check entirely, and scans that company's own site directly for career, team, and case-study pages.</p>
+{error_html}
+<form method="post" action="/inspect">
+  <p><label>Company URL <input name="domain" placeholder="https://example.com" required></label></p>
+  <p><label>Roles/interests (comma-separated; blank uses the default technology terms)
+    <input name="roles"></label></p>
+  <p><button type="submit">Inspect this company</button></p>
 </form>
 </body>
 </html>"""
@@ -94,9 +119,10 @@ def _render_company_card(company: CompanyResult) -> str:
     findings_html = "\n".join(_render_finding(finding) for finding in company.findings) or "<p><em>No findings.</em></p>"
     limitations_html = "".join(f"<li>{html.escape(limitation)}</li>" for limitation in company.limitations)
     limitations_block = f'<ul class="limitations">{limitations_html}</ul>' if limitations_html else ""
+    location_text = ("yes" if company.location_verified else "no") if company.location_checked else "skipped (specific-company mode)"
     return f"""<section class="company">
   <h2>{html.escape(company.name)} <span class="status-{html.escape(company.status)}">{html.escape(company.status)}</span></h2>
-  <p>Sector: {html.escape(company.sector)} &middot; Location verified: {"yes" if company.location_verified else "no"}</p>
+  <p>Sector: {html.escape(company.sector)} &middot; Location verified: {location_text}</p>
   <p class="rank-reason">Why ranked here: {html.escape(rank_reason(company))}</p>
   {findings_html}
   {limitations_block}
@@ -156,6 +182,34 @@ def run_research_form(
     return render_results(report.companies, markdown_path, json_path)
 
 
+def run_inspect_form(
+    domain: str,
+    roles_input: str,
+    profile_id: str = "technology",
+    fetch: Fetch = fetch_page,
+    output: str = "reports/webapp-inspect-report.md",
+) -> str:
+    """Pure orchestration for one submitted specific-company form: no OSM
+    discovery, no location check - straight to analyse_company() on the one
+    domain the user already picked. Kept separate from the route handler so
+    tests can call it directly with fakes, same as run_research_form.
+    """
+    domain = domain.strip()
+    if not (domain.startswith("http://") or domain.startswith("https://")):
+        return render_inspect_form(error="Enter a full company URL, including http:// or https://.")
+
+    try:
+        profile = profile_by_id(profile_id)
+        role_terms = tuple(term.strip() for term in roles_input.split(",") if term.strip()) or profile.role_terms
+        request = ResearchRequest(city="", state="", country="", roles=role_terms, profile=profile.id, location_required=False)
+    except ValueError as exc:
+        return render_inspect_form(error=str(exc))
+
+    company = analyse_company(domain, request, fetch=fetch, profile=profile)
+    markdown_path, json_path = write_report(ResearchReport(request=request, companies=[company]), output)
+    return render_results([company], markdown_path, json_path)
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return render_form()
@@ -169,3 +223,16 @@ def research(
     roles: str = Form(""),
 ) -> str:
     return run_research_form(city, state, country, "technology", roles)
+
+
+@app.get("/inspect", response_class=HTMLResponse)
+def inspect_index() -> str:
+    return render_inspect_form()
+
+
+@app.post("/inspect", response_class=HTMLResponse)
+def inspect(
+    domain: str = Form(...),
+    roles: str = Form(""),
+) -> str:
+    return run_inspect_form(domain, roles)

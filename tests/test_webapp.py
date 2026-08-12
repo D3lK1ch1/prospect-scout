@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from scout.fetcher import FetchResult
 from scout.profiles import load_profiles
-from scout.webapp import app, run_research_form
+from scout.webapp import app, run_inspect_form, run_research_form
 
 
 def fetched(url: str, html: str) -> FetchResult:
@@ -189,6 +189,50 @@ class WebappFormTests(unittest.TestCase):
 
         self.assertIn("Prospect Scout research setup", html)
         self.assertIn("unknown profile", html)
+
+
+class WebappInspectFormTests(unittest.TestCase):
+    def test_inspect_index_offers_the_mode_switch(self):
+        client = TestClient(app)
+        response = client.get("/inspect")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("specific company", response.text.lower())
+        self.assertIn('href="/"', response.text)
+
+    @patch("scout.research.discover_sitemap_pages", return_value=[])
+    def test_run_inspect_form_reports_eligible_company_with_no_location_check(self, _sitemap_discovery):
+        pages = {
+            "https://known.test": fetched(
+                "https://known.test",
+                "<p>software platform</p><a href='/careers'>Careers</a>",
+            ),
+            "https://known.test/careers": fetched(
+                "https://known.test/careers",
+                "<h1>Web Developer</h1><p>Maintain customer website features.</p>",
+            ),
+        }
+        fake_fetch = lambda url: pages.get(url, FetchResult(url, error="not found"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "report.md"
+
+            html = run_inspect_form(
+                domain="https://known.test",
+                roles_input="web developer",
+                fetch=fake_fetch,
+                output=str(output_path),
+            )
+
+            self.assertIn("eligible", html)
+            self.assertIn("known.test", html)
+            self.assertIn("skipped (specific-company mode)", html)
+            self.assertTrue(output_path.exists())
+
+    def test_run_inspect_form_rejects_a_url_missing_the_scheme(self):
+        html = run_inspect_form(domain="known.test", roles_input="")
+
+        self.assertIn("Enter a full company URL", html)
 
 
 if __name__ == "__main__":

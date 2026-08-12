@@ -13,9 +13,10 @@ import sys
 from bs4 import BeautifulSoup
 
 from scout.fetcher import fetch_page
-from scout.models import ResearchRequest
+from scout.models import ResearchReport, ResearchRequest
+from scout.outreach import suggest_outreach_points
 from scout.reporting import write_report
-from scout.research import read_domains, run_research
+from scout.research import analyse_company, read_domains, run_research
 from scout.profiles import ResearchProfile, custom_profile, load_profiles, profile_by_id
 
 
@@ -119,6 +120,50 @@ def cmd_research(args: argparse.Namespace, input_fn=input) -> int:
     return 0
 
 
+def cmd_inspect(args: argparse.Namespace) -> int:
+    """Handle `inspect <domain>`: one specific, already-known company, no
+    location check, no OSM discovery - straight to sitemap-based scanning.
+    """
+    domain = args.domain.strip()
+    if not (domain.startswith("http://") or domain.startswith("https://")):
+        print(f"'{domain}' doesn't look like a URL. Include http:// or https://")
+        return 1
+
+    try:
+        if args.profile == "custom":
+            profile = custom_profile(args.profile_name or "Custom", tuple(args.role), tuple(args.page_term), args.opportunity_prompt or "Ask a cautious, evidence-led discovery question; do not assume an open role.")
+        else:
+            profile = profile_by_id(args.profile)
+        roles = tuple(args.role) or profile.role_terms
+        request = ResearchRequest(city="", state="", country="", roles=roles, profile=profile.id, location_required=False)
+    except ValueError as exc:
+        print(f"Inspect setup failed: {exc}")
+        return 2
+
+    print(f"Fetching {domain} ...")
+    company = analyse_company(domain, request, profile=profile)
+    report = ResearchReport(request=request, companies=[company])
+    markdown, json_file = write_report(report, args.output)
+
+    print(f"\n{company.name} - status: {company.status}, sector: {company.sector}")
+    print("Location check skipped - you already picked this company, so nothing here claims to verify where they're based.")
+    if not company.findings:
+        print("No evidence-backed findings.")
+    for finding in company.findings:
+        print(f"\n[{finding.kind}] confidence: {finding.confidence}")
+        print(finding.evidence)
+        print(f"Source: {finding.source_url}")
+        print(f"Suggestion: {finding.suggestion}")
+        points = suggest_outreach_points(finding)
+        if points:
+            print(f"Outreach angle: {points}")
+    for limitation in company.limitations:
+        print(f"\nLimitation: {limitation}")
+
+    print(f"\nSaved to {markdown} and {json_file}.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="scout",
@@ -143,6 +188,15 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--limit", type=int, default=20, help="Maximum supplied domains to inspect (default: 20)")
     research.add_argument("--output", default="reports/prospect-scout-report.md", help="Local Markdown report path")
 
+    inspect = subparsers.add_parser("inspect", help="Deep-dive one specific, already-known company - no location check, no OSM discovery.")
+    inspect.add_argument("domain", help="The company's site, e.g. https://example.com")
+    inspect.add_argument("--role", action="append", default=[], help="Role or technical interest; repeat as needed. Blank uses the profile's default terms.")
+    inspect.add_argument("--profile", default="technology", help="Focus profile ID, or custom (default: technology)")
+    inspect.add_argument("--profile-name", help="Display name for --profile custom")
+    inspect.add_argument("--page-term", action="append", default=[], help="Page label/URL word for --profile custom; repeat as needed")
+    inspect.add_argument("--opportunity-prompt", help="Cautious suggested-next-step text for --profile custom")
+    inspect.add_argument("--output", default="reports/prospect-scout-inspect.md", help="Local Markdown report path")
+
     return parser
 
 
@@ -161,6 +215,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.limit < 1:
             parser.error("--limit must be at least 1")
         return cmd_research(args)
+
+    if args.command == "inspect":
+        return cmd_inspect(args)
 
     # argparse guarantees a valid command, so we never reach here.
     parser.print_help()
