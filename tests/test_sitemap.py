@@ -12,7 +12,7 @@ from unittest.mock import patch
 import httpx
 
 from scout.research import _TEAM_PAGE_KEYWORDS
-from scout.sitemap import discover_sitemap_pages, find_sitemap_urls
+from scout.sitemap import STRONG_PATH_KEYWORDS, discover_sitemap_pages, find_sitemap_urls
 
 SITEMAP_NS = 'xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"'
 
@@ -265,6 +265,108 @@ class DiscoverSitemapPagesTests(unittest.TestCase):
         result = discover_sitemap_pages("https://example.test")
 
         self.assertEqual(result, ["https://example.test/case-studies/mine"])
+
+
+class RankedMatchingTests(unittest.TestCase):
+    """Regression for a confirmed real bug found live against myob.com: a
+    single 3,400-line sitemap listed dozens of weak-keyword ("resource"/
+    "insight") blog/tag pages before its two genuine case-study posts, later
+    in the same file. The old code stopped scanning the moment it hit
+    `limit` raw matches - it never reached the real ones at all.
+    """
+
+    @patch("scout.sitemap.httpx.Client")
+    def test_whole_sitemap_is_scanned_not_just_the_first_limit_matches(self, client_factory):
+        # 6 weak-keyword matches appear before 2 strong-keyword ones in
+        # document order - old code (limit=5, stop-on-first-5) would never
+        # even see the strong ones.
+        weak_first = [f"https://example.test/insight/topic/{i}" for i in range(6)]
+        strong_later = [
+            "https://example.test/insight/post/real-case-study",
+            "https://example.test/insight/post/another-case-story",
+        ]
+        client_factory.return_value = StubClient({
+            "https://example.test/robots.txt": xml_response(
+                "https://example.test/robots.txt", robots_with_sitemap("https://example.test/sitemap.xml")
+            ),
+            "https://example.test/sitemap.xml": xml_response(
+                "https://example.test/sitemap.xml", urlset(*weak_first, *strong_later)
+            ),
+        })
+
+        result = discover_sitemap_pages("https://example.test", priority_keywords=STRONG_PATH_KEYWORDS)
+
+        self.assertEqual(set(result) & set(strong_later), set(strong_later), "both strong matches should survive the cutoff")
+
+    @patch("scout.sitemap.httpx.Client")
+    def test_priority_keywords_outrank_weak_only_matches(self, client_factory):
+        client_factory.return_value = StubClient({
+            "https://example.test/robots.txt": xml_response(
+                "https://example.test/robots.txt", robots_with_sitemap("https://example.test/sitemap.xml")
+            ),
+            "https://example.test/sitemap.xml": xml_response(
+                "https://example.test/sitemap.xml",
+                urlset("https://example.test/insight/topic/gst", "https://example.test/insight/post/case-study-acme"),
+            ),
+        })
+
+        result = discover_sitemap_pages("https://example.test", limit=1, priority_keywords=STRONG_PATH_KEYWORDS)
+
+        self.assertEqual(result, ["https://example.test/insight/post/case-study-acme"])
+
+    @patch("scout.sitemap.httpx.Client")
+    def test_boost_term_requires_all_its_words_not_just_one_shared_word(self, client_factory):
+        # Regression for a confirmed real bug: single-word boost matching let
+        # "software" alone (shared between "software developer" and MYOB's
+        # own product-page vocabulary) artificially outrank a genuine
+        # case-study page that never mentioned "developer"/"engineer" at
+        # all - even though both are otherwise the same priority tier ("job"
+        # and "case" are both strong keywords) and the case study is listed
+        # first in the sitemap. With the bug, the product page's spurious
+        # +1 pushed it ahead despite that; without it, the tie is broken by
+        # document order, same as any other equally-tiered pair.
+        client_factory.return_value = StubClient({
+            "https://example.test/robots.txt": xml_response(
+                "https://example.test/robots.txt", robots_with_sitemap("https://example.test/sitemap.xml")
+            ),
+            "https://example.test/sitemap.xml": xml_response(
+                "https://example.test/sitemap.xml",
+                urlset(
+                    "https://example.test/insight/post/case-study-acme",  # genuine case study: no boost words at all
+                    "https://example.test/features/job-software-for-tradies",  # product page: "software" only
+                ),
+            ),
+        })
+
+        result = discover_sitemap_pages(
+            "https://example.test",
+            limit=1,
+            priority_keywords=STRONG_PATH_KEYWORDS,
+            boost_terms=("software developer", "software engineer"),
+        )
+
+        self.assertEqual(result, ["https://example.test/insight/post/case-study-acme"])
+
+    @patch("scout.sitemap.httpx.Client")
+    def test_boost_term_ranks_a_full_phrase_match_above_a_same_tier_competitor(self, client_factory):
+        client_factory.return_value = StubClient({
+            "https://example.test/robots.txt": xml_response(
+                "https://example.test/robots.txt", robots_with_sitemap("https://example.test/sitemap.xml")
+            ),
+            "https://example.test/sitemap.xml": xml_response(
+                "https://example.test/sitemap.xml",
+                urlset(
+                    "https://example.test/careers/office-manager",
+                    "https://example.test/careers/software-developer",
+                ),
+            ),
+        })
+
+        result = discover_sitemap_pages(
+            "https://example.test", limit=1, priority_keywords=STRONG_PATH_KEYWORDS, boost_terms=("software developer",)
+        )
+
+        self.assertEqual(result, ["https://example.test/careers/software-developer"])
 
 
 class WholeWordKeywordMatchingTests(unittest.TestCase):

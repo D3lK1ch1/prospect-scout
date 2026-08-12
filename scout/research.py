@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from scout.fetcher import FetchResult, fetch_page
 from scout.models import CompanyResult, Finding, ResearchReport, ResearchRequest
 from scout.profiles import ResearchProfile, profile_by_id
-from scout.sitemap import discover_sitemap_pages
+from scout.sitemap import SITEMAP_PATH_KEYWORDS, STRONG_PATH_KEYWORDS, discover_sitemap_pages, same_site
 
 Fetch = Callable[[str], FetchResult]
 
@@ -51,33 +51,144 @@ def read_domains(path: str) -> list[str]:
     return found
 
 
+def _snap_start(text: str, index: int) -> int:
+    """Nudge an excerpt's start index forward to the next word boundary,
+    never backward into a word already in progress at `index`."""
+    if index <= 0 or text[index - 1].isspace():
+        return index
+    next_space = text.find(" ", index)
+    return next_space + 1 if next_space != -1 else index
+
+
+def _snap_end(text: str, index: int) -> int:
+    """Nudge an excerpt's end index backward to the previous word boundary."""
+    if index >= len(text) or text[index].isspace():
+        return index
+    prev_space = text.rfind(" ", 0, index)
+    return prev_space if prev_space != -1 else index
+
+
 def text_excerpt(text: str, phrase: str, width: int = 180) -> str:
-    index = text.lower().find(phrase.lower())
+    """A snippet of text around `phrase`'s real, whole-word occurrence.
+
+    Searches by word boundary first, not a raw substring find - confirmed
+    real bug: a naive `.find("cto")` matched inside "Director" (a literal
+    substring of that unrelated word) instead of the real "CTO" mention
+    elsewhere on the page, so the excerpt - and any name-guessing built on
+    it - was built around the wrong sentence entirely. Falls back to a plain
+    substring search only if no whole-word match exists, so callers that
+    ever hand in a genuinely partial phrase still degrade to something
+    rather than nothing.
+
+    The excerpt's start/end are also snapped to word boundaries, not cut at
+    a fixed character offset - confirmed real bug: a fixed-width cut clipped
+    "Workstar" down to "rkstar" because the cutoff landed two characters
+    into the word, not before it.
+    """
+    lower = text.lower()
+    match = re.search(rf"\b{re.escape(phrase.lower())}\b", lower)
+    index = match.start() if match else lower.find(phrase.lower())
     if index < 0:
         return text[:width].strip()
-    return text[max(0, index - 60): index + len(phrase) + 100].strip()
+    start = _snap_start(text, max(0, index - 60))
+    end = _snap_end(text, index + len(phrase) + 100)
+    return text[start:end].strip()
 
 
 _CHROME_TAGS = ("nav", "header", "footer", "script", "style", "noscript")
+# WordPress' near-universal accessibility skip-link ("Skip to content") sits
+# directly under <body>, outside every _CHROME_TAGS wrapper above - confirmed
+# real leak: dnx.solutions' case-study excerpts included the literal words
+# "Skip to content" ahead of the real page content. Visually hidden from a
+# sighted visitor by the class itself, not genuine page content; stripping it
+# isn't losing real evidence, it's removing a screen-reader-only nav aid.
+_CHROME_CLASSES = ("skip-link",)
 
 
 def page_text(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(_CHROME_TAGS):
         tag.decompose()
+    for class_name in _CHROME_CLASSES:
+        for tag in soup.find_all(class_=class_name):
+            tag.decompose()
     return soup.get_text(" ", strip=True)
 
 
-def evidence_urls(base_url: str, html: str, profile: ResearchProfile) -> list[str]:
+def _cross_subdomain_nav_links(base_url: str, html: str, priority_keywords: tuple[str, ...]) -> list[str]:
+    """Direct <a href> links on the homepage itself, to a *different*
+    subdomain of the same registrable domain, whose link text or path hits a
+    precise page-type keyword - e.g. a "Careers" nav link pointing at a
+    dedicated careers.<company>.com portal.
+
+    Confirmed real case: myob.com's own homepage footer links
+    careers.myob.com verbatim (`<a title="Careers" href="https://careers.
+    myob.com/">`), but myob.com's sitemap never references that subdomain at
+    all - sitemap-based discovery alone can't reach it no matter how it's
+    ranked. This is a small, targeted check (the company's own top-level
+    nav/footer, already-fetched HTML, no new network calls) - not a broad
+    crawl - so it runs every time, not only when the sitemap comes back
+    empty; a company's own direct link to its own careers portal is stronger
+    evidence than anything sitemap-ranking can infer.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    base_netloc = urlsplit(base_url).netloc
+    found: list[str] = []
+    for link in soup.select("a[href]"):
+        href = link["href"]
+        url = urljoin(base_url, href)
+        netloc = urlsplit(url).netloc
+        if netloc == base_netloc or not same_site(netloc, base_netloc):
+            continue  # same-origin already covered elsewhere; this wants a genuine subdomain hop only
+        label = f"{link.get_text(' ', strip=True)} {href}".lower()
+        if any(word.lower() in label for word in priority_keywords) and url not in found:
+            found.append(url)
+    return found
+
+
+# A subdomain worth linking to from the homepage is often worth checking for
+# its own sitemap too, not just fetching the one linked page. Confirmed real
+# case: careers.myob.com is linked from myob.com's homepage *and* separately
+# publishes its own sitemap.xml listing careers.myob.com/explore-roles -
+# myob.com's own sitemap never references either. Bounded to a small number
+# of distinct hosts - the nav-link scan feeding this is already small and
+# curated (a handful of homepage nav/footer links), never a broad crawl.
+_MAX_CROSS_SUBDOMAIN_HOSTS = 2
+
+
+def _cross_subdomain_sitemap_urls(cross_subdomain_links: list[str], keywords: tuple[str, ...], limit: int, whole_word: bool, priority_keywords: tuple[str, ...], boost_terms: tuple[str, ...] = ()) -> list[str]:
+    seen_hosts: set[str] = set()
+    matches: list[str] = []
+    for url in cross_subdomain_links:
+        if len(seen_hosts) >= _MAX_CROSS_SUBDOMAIN_HOSTS:
+            break
+        parts = urlsplit(url)
+        host_base = f"{parts.scheme}://{parts.netloc}"
+        if host_base in seen_hosts:
+            continue
+        seen_hosts.add(host_base)
+        matches.extend(discover_sitemap_pages(host_base, keywords=keywords, limit=limit, whole_word=whole_word, priority_keywords=priority_keywords, boost_terms=boost_terms))
+    return matches
+
+
+def evidence_urls(base_url: str, html: str, profile: ResearchProfile, boost_terms: tuple[str, ...] = ()) -> list[str]:
     """Discover a bounded set of pages relevant to the selected profile.
 
     Tries sitemap-based discovery first (finds the right pages without
-    guessing which nav link leads where); falls back to scanning the
-    homepage's own links when no sitemap exists or nothing matched.
+    guessing which nav link leads where), combined with any direct
+    cross-subdomain nav link the company's own homepage publishes and that
+    subdomain's own sitemap if it has one (see _cross_subdomain_nav_links /
+    _cross_subdomain_sitemap_urls); falls back to scanning the homepage's
+    own same-origin links when none of that finds anything.
+    `boost_terms` - the requester's own typed roles/interests - only affects
+    which of the matched pages rank highest, never which ones are found.
     """
-    sitemap_urls = discover_sitemap_pages(base_url)
-    if sitemap_urls:
-        return sitemap_urls[:5]
+    sitemap_urls = discover_sitemap_pages(base_url, priority_keywords=STRONG_PATH_KEYWORDS, boost_terms=boost_terms)
+    cross_subdomain = _cross_subdomain_nav_links(base_url, html, STRONG_PATH_KEYWORDS)
+    cross_subdomain_sitemap = _cross_subdomain_sitemap_urls(cross_subdomain, SITEMAP_PATH_KEYWORDS, 5, False, STRONG_PATH_KEYWORDS, boost_terms)
+    combined = list(dict.fromkeys((*cross_subdomain, *cross_subdomain_sitemap, *sitemap_urls)))  # the company's own direct link ranks first
+    if combined:
+        return combined[:5]
 
     soup = BeautifulSoup(html, "html.parser")
     urls: list[str] = []
@@ -104,14 +215,18 @@ _TEAM_PAGE_PATHS = ("/team", "/about", "/about-us", "/leadership", "/people")
 
 
 def team_page_urls(base_url: str, html: str) -> list[str]:
-    """Up to 2 candidate team/about/leadership page URLs: sitemap first (same
-    mechanism discover_sitemap_pages() already uses for career/case-study
-    pages, just with team-page keywords), homepage-link scan as fallback.
-    Bounded to 2 - this only needs one real hit, not exhaustive coverage.
+    """Up to 2 candidate team/about/leadership page URLs: sitemap plus any
+    direct cross-subdomain nav link and that subdomain's own sitemap (same
+    combined approach as evidence_urls() - see _cross_subdomain_nav_links /
+    _cross_subdomain_sitemap_urls), homepage-link scan as fallback. Bounded
+    to 2 - this only needs one real hit, not exhaustive coverage.
     """
-    sitemap_urls = discover_sitemap_pages(base_url, keywords=_TEAM_PAGE_KEYWORDS, limit=2, whole_word=True)
-    if sitemap_urls:
-        return sitemap_urls
+    sitemap_urls = discover_sitemap_pages(base_url, keywords=_TEAM_PAGE_KEYWORDS, limit=2, whole_word=True, priority_keywords=_TEAM_PAGE_KEYWORDS)
+    cross_subdomain = _cross_subdomain_nav_links(base_url, html, _TEAM_PAGE_KEYWORDS)
+    cross_subdomain_sitemap = _cross_subdomain_sitemap_urls(cross_subdomain, _TEAM_PAGE_KEYWORDS, 2, True, _TEAM_PAGE_KEYWORDS)
+    combined = list(dict.fromkeys((*cross_subdomain, *cross_subdomain_sitemap, *sitemap_urls)))
+    if combined:
+        return combined[:2]
 
     soup = BeautifulSoup(html, "html.parser")
     urls: list[str] = []
@@ -272,6 +387,8 @@ def location_is_verified(text: str, request: ResearchRequest, domain: str = "") 
     name; country accepts either the literal word or a matching ccTLD on the
     fetched domain (e.g. .com.au implying Australia) as a fallback.
     """
+    if not request.city.strip():
+        return False
     lower = text.lower()
     if request.city.lower() not in lower:
         return False
@@ -432,9 +549,11 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
 
     home_text = page_text(homepage.html or "")
     result.sector = infer_sector(home_text)
-    result.location_verified = location_is_verified(home_text, request, homepage.final_url or domain)
-    if not result.location_verified:
-        result.limitations.append("Requested city/state/country was not verified on the fetched homepage.")
+    result.location_checked = request.location_required
+    if request.location_required:
+        result.location_verified = location_is_verified(home_text, request, homepage.final_url or domain)
+        if not result.location_verified:
+            result.limitations.append("Requested city/state/country was not verified on the fetched homepage.")
 
     # Our own guessed fallback paths (profile.fallback_paths) must never be
     # reported as "a broken link on this site" if they 404 - that's our
@@ -445,7 +564,7 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
     broken_links: list[Finding] = []
 
     all_terms = tuple(dict.fromkeys((*profile.role_terms, *request.roles)))
-    for url in evidence_urls(homepage.final_url or domain, homepage.html or "", profile):
+    for url in evidence_urls(homepage.final_url or domain, homepage.html or "", profile, boost_terms=all_terms):
         page = fetch(url)
         if not page.ok:
             if url not in guessed_paths:
@@ -495,7 +614,8 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
     if contact:
         result.findings.append(contact)
 
-    if result.location_verified and result.findings and result.findings[0].confidence != "low":
+    location_ok = result.location_verified or not request.location_required
+    if location_ok and result.findings and result.findings[0].confidence != "low":
         result.status = "eligible"
 
     # Both purely additive, after eligibility is already decided: neither a

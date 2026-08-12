@@ -7,7 +7,7 @@ from unittest.mock import patch
 from scout.fetcher import FetchResult
 from scout.models import CompanyResult, Finding, ResearchRequest
 from scout.reporting import write_report
-from scout.research import _is_job_page, _looks_like_msp, _nearest_name, analyse_company, contact_finding, detect_platform_signal, evidence_urls, hidden_need_finding, infer_sector, location_is_verified, matching_roles, normalise_domain, page_text, read_domains, team_page_urls, title_artifact_finding
+from scout.research import _is_job_page, _looks_like_msp, _nearest_name, analyse_company, contact_finding, detect_platform_signal, evidence_urls, hidden_need_finding, infer_sector, location_is_verified, matching_roles, normalise_domain, page_text, read_domains, team_page_urls, text_excerpt, title_artifact_finding
 from scout.profiles import custom_profile, load_profiles
 
 
@@ -75,6 +75,30 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(result.status, "eligible")
         self.assertIn("Grants Coordinator", result.findings[0].evidence)
         self.assertTrue(any(profile.id == "technology" for profile in load_profiles()))
+
+    def test_specific_company_mode_skips_location_check_entirely(self):
+        # location_required=False (scout inspect / webapp /inspect): a company
+        # the human already picked and knows the location of shouldn't need
+        # "Melbourne VIC Australia" on the page to become eligible.
+        request = ResearchRequest(city="", state="", country="", roles=("web developer",), location_required=False)
+        pages = {
+            "https://known.test": fetched("https://known.test", "<p>software platform</p><a href='/careers'>Careers</a>"),
+            "https://known.test/careers": fetched("https://known.test/careers", "<h1>Web Developer</h1><p>Maintain customer website features.</p>"),
+        }
+
+        result = analyse_company("https://known.test", request, fetch=lambda url: pages.get(url, FetchResult(url, error="not found")))
+
+        self.assertEqual(result.status, "eligible")
+        self.assertFalse(result.location_verified)
+        self.assertFalse(result.location_checked)
+        self.assertEqual(result.limitations, [])  # never claims an unattempted check "failed"
+
+    def test_blank_location_is_allowed_only_when_not_required(self):
+        with self.assertRaises(ValueError):
+            ResearchRequest(city="", state="", country="", roles=("web developer",))  # location_required defaults True
+
+        # Doesn't raise:
+        ResearchRequest(city="", state="", country="", roles=("web developer",), location_required=False)
 
     def test_domain_file_deduplicates_and_ignores_comments(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -216,6 +240,53 @@ class PageTextChromeStrippingTests(unittest.TestCase):
         text = page_text(html)
         self.assertIn("Visible", text)
         self.assertNotIn("leak-me", text)
+
+    def test_strips_wordpress_skip_link_outside_any_chrome_tag(self):
+        # Regression for a confirmed real leak: dnx.solutions' skip-link sits
+        # as a direct child of <body>, not inside nav/header/footer, so the
+        # existing tag-based stripping above never touched it - "Skip to
+        # content" leaked straight into extracted evidence text.
+        html = '<body><a class="skip-link screen-reader-text" href="#content">Skip to content</a><p>Real page content.</p></body>'
+        text = page_text(html)
+        self.assertIn("Real page content", text)
+        self.assertNotIn("Skip to content", text)
+
+
+class TextExcerptTests(unittest.TestCase):
+    """Regression for two confirmed real bugs found live against dnx.solutions
+    and enspyr.co (see RESEARCH.md): a naive substring search could land on a
+    coincidental match inside an unrelated word, and even a correct match
+    location got cut mid-word by the fixed-width character slice.
+    """
+
+    def test_finds_the_real_whole_word_occurrence_not_a_coincidental_substring(self):
+        # "cto" is a literal substring of "Director" - a naive .find("cto")
+        # locks onto that instead of the real "CTO" mention later in the text,
+        # far enough away that it falls outside the excerpt window once the
+        # search starts from the correct, word-boundary location.
+        text = (
+            "Nicholas Meinhold Director and Tech Lead. "
+            + ("padding words here to push it further away. " * 3)
+            + "Concurrently CTO or co-founder of several startups across many countries doing many things."
+        )
+        excerpt = text_excerpt(text, "CTO")
+        self.assertIn("Concurrently CTO or co-founder", excerpt)
+        self.assertNotIn("Director", excerpt)
+
+    def test_excerpt_boundaries_snap_to_whole_words_not_mid_word(self):
+        # A phrase far enough into the text that a fixed 60-char lookback
+        # would land mid-word inside "Workstar" - the real bug shape.
+        text = "x" * 55 + " Workstar: Modernising a Windows-based application by applying DevOps on AWS today."
+        excerpt = text_excerpt(text, "DevOps")
+        self.assertTrue(excerpt.startswith("Workstar") or excerpt.startswith("Modernising"))
+        self.assertNotIn("rkstar", excerpt)
+
+    def test_falls_back_to_a_naive_search_when_no_whole_word_match_exists(self):
+        # No literal callers pass a genuinely partial phrase today, but the
+        # fallback should still degrade to something rather than nothing.
+        text = "prefixCTOsuffix and other text here padding it out further."
+        excerpt = text_excerpt(text, "CTO")
+        self.assertIn("prefixCTOsuffix", excerpt)
 
 
 class TitleArtifactFindingTests(unittest.TestCase):
