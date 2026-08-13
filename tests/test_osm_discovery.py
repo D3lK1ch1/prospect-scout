@@ -183,32 +183,6 @@ class QueryOverpassTests(unittest.TestCase):
         # Narrowed: the unfiltered `["office"]` wildcard (no `=value`) must be gone.
         self.assertNotIn('"office"]', sent_query)
 
-    @patch("scout.osm_discovery.time.sleep")
-    @patch("scout.osm_discovery.httpx.Client")
-    def test_marketing_profile_uses_advertising_agency_not_the_advertising_key(self, client_factory, _sleep):
-        stub = StubClient(json_response("https://overpass-api.de/api/interpreter", method="POST", payload={"elements": []}))
-        client_factory.return_value = stub
-
-        query_overpass(self.bbox, profile_id="marketing")
-
-        sent_query = stub.calls[0][2]
-        self.assertIn('"office"="advertising_agency"', sent_query)
-        # advertising=* was ruled out (billboards/signage, not agencies) - must
-        # never be sent as a bare `["advertising"]` clause.
-        self.assertNotIn('"advertising"]', sent_query)
-
-    @patch("scout.osm_discovery.time.sleep")
-    @patch("scout.osm_discovery.httpx.Client")
-    def test_business_admin_profile_excludes_government_by_default(self, client_factory, _sleep):
-        stub = StubClient(json_response("https://overpass-api.de/api/interpreter", method="POST", payload={"elements": []}))
-        client_factory.return_value = stub
-
-        query_overpass(self.bbox, profile_id="business_admin")
-
-        sent_query = stub.calls[0][2]
-        self.assertIn('"office"="estate_agent"', sent_query)
-        self.assertNotIn('"office"="government"', sent_query)
-
 
 class ParseToDomainsTests(unittest.TestCase):
     def test_extracts_normalised_deduplicated_domains(self):

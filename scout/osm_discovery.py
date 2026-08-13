@@ -80,30 +80,20 @@ _PROFILE_TAGS: dict[str, tuple[tuple[str, str | None], ...]] = {
         ("office", "research"),
         ("office", "engineer"),
         ("shop", "computer"),
-    ),
-    "marketing": (
-        ("office", "advertising_agency"),
-    ),
-    "retail_operations": (
-        ("shop", "department_store"),
-        ("shop", "trade"),
-        ("shop", "wholesale"),
-    ),
-    "business_admin": (
         ("office", "company"),
-        ("office", "estate_agent"),
         ("office", "financial"),
         ("office", "consulting"),
-        ("office", "ngo"),
-    ),
+        ("office", "association"),
+        ("office", "insurance"),
+        ("office", "telecommunication"),
+        ("office", "software"),
+        ("office", "law"),
+        ("office", "accountant"),
+        ("office", "architect"),
+        ("office", "design"),
+    )
 }
-# amenity=library / research_institute are a validated broadening (see
-# docs/KNOWN_GAPS.md #2) with confirmed real hits and small, bounded sitemaps.
-# Kept unconditional for every profile rather than technology-only: broadly
-# useful general-purpose finds, not really sector-specific - a judgment call,
-# not a confirmed fact, revisit if it proves noisy. amenity=university
-# deliberately excluded: real hits too, but sitemaps too large for this
-# pipeline.
+# amenity=university deliberately excluded: real hits too, but sitemaps too large for this pipeline.
 _UNIVERSAL_TAGS: tuple[tuple[str, str | None], ...] = (
     ("amenity", "library"),
     ("amenity", "research_institute"),

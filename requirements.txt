@@ -1,5 +1,6 @@
 # Runtime dependencies. Installed into .venv (see README).
 httpx
+protego
 beautifulsoup4
 fastapi
 uvicorn

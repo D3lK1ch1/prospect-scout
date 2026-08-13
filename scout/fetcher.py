@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
-import urllib.robotparser
 
 import httpx
+from protego import Protego
 
 # Identify honestly so a site owner reading their logs knows what this was.
 USER_AGENT = "ProspectScout/0.1 (local personal-use site audit; run by hand)"
@@ -50,6 +50,13 @@ def robots_allows(url: str, client: httpx.Client) -> bool:
 
     A missing or unreachable robots.txt counts as permission (the accepted
     convention for 4xx/no-file), but any explicit rule is honored.
+
+    Uses Protego rather than stdlib's urllib.robotparser, which only
+    implements the 1996 draft and has no support for the `*`/`$` wildcard
+    syntax RFC 9309 requires (confirmed live against real sites in
+    python/cpython#115644) - Protego is the RFC 9309-compliant parser Scrapy
+    itself adopted as its default for the same reason. Note the flipped
+    argument order versus stdlib: url first, user agent second.
     """
     try:
         response = client.get(_robots_url(url))
@@ -58,9 +65,8 @@ def robots_allows(url: str, client: httpx.Client) -> bool:
     if response.status_code >= 400:
         return True
 
-    parser = urllib.robotparser.RobotFileParser()
-    parser.parse(response.text.splitlines())
-    return parser.can_fetch(USER_AGENT, url)
+    parser = Protego.parse(response.text)
+    return parser.can_fetch(url, USER_AGENT)
 
 
 def fetch_page(url: str) -> FetchResult:
