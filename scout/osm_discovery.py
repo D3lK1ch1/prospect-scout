@@ -86,7 +86,6 @@ _PROFILE_TAGS: dict[str, tuple[tuple[str, str | None], ...]] = {
         ("office", "association"),
         ("office", "insurance"),
         ("office", "telecommunication"),
-        ("office", "software"),
         ("office", "law"),
         ("office", "accountant"),
         ("office", "architect"),
@@ -110,21 +109,50 @@ def _candidate_tags(profile_id: str | None) -> tuple[tuple[str, str | None], ...
     return _PROFILE_TAGS[profile_id] + _UNIVERSAL_TAGS
 
 
+# Live-trial-confirmed against the exact Melbourne bbox this module resolves
+# today (2026-08-29, south=-38.49937 west=144.44405 north=-37.40175
+# east=146.1925): 4 tag pairs (16 clauses) succeeded in 14.7s: comfortable
+# margin. 8 tag pairs (32 clauses) succeeded but at 24.0s, right against the
+# 25s per-request timeout - too close to trust as a default. 12 and 16 tag
+# pairs both timed out outright, consistent with the original 68-clause
+# single-query failure (2026-08-21). 4 is the largest group size confirmed
+# with real headroom, not a guess.
+_BATCH_SIZE = 4
+
+
+def _chunked(tags: tuple[tuple[str, str | None], ...], size: int) -> list[tuple[tuple[str, str | None], ...]]:
+    return [tags[i:i + size] for i in range(0, len(tags), size)]
+
+
+def _tag_clauses(key: str, value: str | None, box: str) -> list[str]:
+    tag_filter = f'["{key}"]' if value is None else f'["{key}"="{value}"]'
+    return [
+        f'{element_type}{tag_filter}["{website_tag}"]({box});'
+        for element_type in ("node", "way")
+        for website_tag in ("website", "contact:website")
+    ]
+
+
 def query_overpass(bbox: BoundingBox, profile_id: str | None = None) -> list[dict]:
     """Query Overpass for businesses matching the profile's OSM tags (or the
     unfiltered office=* fallback when no profile is given) with a website tag
-    inside bbox. [] on error, one query per tag pair.
+    inside bbox. [] on error, one query per batch of up to _BATCH_SIZE tag
+    pairs.
+
+    Batched rather than one request per tag pair or one giant combined
+    request - the confirmed middle ground between the two failure modes
+    already hit live: one combined 68-clause query timed out outright
+    (2026-08-21), while one request per tag pair works but costs far more
+    round-trips than necessary once a profile has many tags. A single
+    batch's request failing (timeout, 5xx, network error) is skipped, not
+    treated as failing the whole search - same reasoning the original
+    per-tag-pair design used, just applied per batch instead of per tag.
     """
     box = f"{bbox.south},{bbox.west},{bbox.north},{bbox.east}"
     elements: list[dict] = []
     with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SECONDS) as client:
-        for key, value in _candidate_tags(profile_id):
-            tag_filter = f'["{key}"]' if value is None else f'["{key}"="{value}"]'
-            clauses = [
-                f'{element_type}{tag_filter}["{website_tag}"]({box});'
-                for element_type in ("node", "way")
-                for website_tag in ("website", "contact:website")
-            ]
+        for batch in _chunked(_candidate_tags(profile_id), _BATCH_SIZE):
+            clauses = [clause for key, value in batch for clause in _tag_clauses(key, value, box)]
             query = f"[out:json][timeout:25];({''.join(clauses)});out center;"
             _throttle()
             try:

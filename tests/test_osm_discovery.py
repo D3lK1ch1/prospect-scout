@@ -122,21 +122,21 @@ class QueryOverpassTests(unittest.TestCase):
     @patch("scout.osm_discovery.time.sleep")
     @patch("scout.osm_discovery.httpx.Client")
     def test_returns_elements_on_success(self, client_factory, _sleep):
-        # No profile_id -> the 3-tag-pair fallback set, one request each; the
-        # stub returns the same 4-element fixture for every call, so raw
-        # elements come back 3x (12) - parse_to_domains, not query_overpass,
-        # is what dedups in real usage (see query_overpass's own docstring).
+        # No profile_id -> the 3-tag-pair fallback set, which fits inside one
+        # _BATCH_SIZE=4 batch - a single request, single fixture return.
         client_factory.return_value = StubClient(json_response("https://overpass-api.de/api/interpreter", method="POST", payload=OVERPASS_FIXTURE))
 
         elements = query_overpass(self.bbox)
 
-        self.assertEqual(len(elements), 12)
+        self.assertEqual(len(elements), 4)
 
     @patch("scout.osm_discovery.time.sleep")
     @patch("scout.osm_discovery.httpx.Client")
-    def test_one_tag_pairs_request_failing_does_not_blank_out_the_others(self, client_factory, _sleep):
-        """Splitting into per-tag-pair requests means a single failing
-        tag doesn't take the rest down with it"""
+    def test_one_batchs_request_failing_does_not_blank_out_the_others(self, client_factory, _sleep):
+        """Splitting into per-batch requests means a single failing batch
+        doesn't take the rest down with it. Uses the technology profile (16
+        tag pairs -> 4 batches of _BATCH_SIZE=4) since the 3-tag-pair
+        fallback set fits in a single batch and can't exercise this."""
         stub = StubClient(json_response("https://overpass-api.de/api/interpreter", method="POST", payload=OVERPASS_FIXTURE))
         client_factory.return_value = stub
         real_post = stub.post
@@ -150,9 +150,9 @@ class QueryOverpassTests(unittest.TestCase):
 
         stub.post = flaky_post
 
-        elements = query_overpass(self.bbox)  # fallback set: 3 tag pairs, 1 fails
+        elements = query_overpass(self.bbox, profile_id="technology")
 
-        self.assertEqual(len(elements), 8)  # 2 successful tag pairs x 4 elements each
+        self.assertEqual(len(elements), 12)  # 3 successful batches x 4 elements each
 
     @patch("scout.osm_discovery.time.sleep")
     @patch("scout.osm_discovery.httpx.Client")
@@ -176,8 +176,8 @@ class QueryOverpassTests(unittest.TestCase):
 
         query_overpass(self.bbox)
 
-        # One request per tag pair now - check the set of sent queries, not just the first.
-        self.assertEqual(len(stub.calls), 3)  # unfiltered office + 2 universal amenities
+        # 3 tag pairs (unfiltered office + 2 universal amenities) fit in one _BATCH_SIZE=4 batch.
+        self.assertEqual(len(stub.calls), 1)
         sent_queries = [call[2] for call in stub.calls]
         self.assertTrue(any('"office"]' in query for query in sent_queries))
         self.assertTrue(any('"amenity"="library"' in query for query in sent_queries))
@@ -210,10 +210,14 @@ class QueryOverpassTests(unittest.TestCase):
         self.assertTrue(any('"amenity"="library"' in query for query in sent_queries))
         # Narrowed: the unfiltered `["office"]` wildcard (no `=value`) must be gone.
         self.assertTrue(all('"office"]' not in query for query in sent_queries))
-        # Each request stays small - one tag pair's clauses, not all combined
-        # (the actual fix: a 68-clause single request timed out live, 2026-08-21).
+        # office=software confirmed 0 Melbourne hits (RESEARCH.md) and dropped.
+        self.assertTrue(all('"office"="software"' not in query for query in sent_queries))
+        # Each request stays one batch of up to _BATCH_SIZE=4 tag pairs' clauses,
+        # not everything combined (the original failure: a 68-clause single
+        # request timed out live, 2026-08-21; the live-trial-confirmed batch
+        # size lives in _BATCH_SIZE's own comment, 2026-08-29).
         self.assertTrue(all(query.count("[out:json]") == 1 for query in sent_queries))
-        self.assertEqual(len(stub.calls), 17)  # 15 technology-specific tag pairs + 2 universal amenities
+        self.assertEqual(len(stub.calls), 4)  # ceil(16 tag pairs / _BATCH_SIZE=4)
 
 
 class ParseToDomainsTests(unittest.TestCase):
