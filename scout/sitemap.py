@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlsplit
 from xml.etree import ElementTree as ET
 
 import httpx
+from protego import Protego
 
 from scout.fetcher import TIMEOUT_SECONDS, USER_AGENT
 
@@ -85,6 +86,11 @@ def find_sitemap_urls(base_url: str) -> list[str]:
 
 
 def _sitemaps_from_robots(base_url: str, client: httpx.Client) -> list[str]:
+    """Declared `Sitemap:` URL(s), via Protego rather than hand-rolled line
+    parsing - same RFC 9309-compliant parser `scout/fetcher.py:robots_allows()`
+    already uses, instead of a second, separately-maintained parse of the
+    same file.
+    """
     try:
         response = client.get(urljoin(base_url, "/robots.txt"))
     except httpx.HTTPError:
@@ -92,11 +98,9 @@ def _sitemaps_from_robots(base_url: str, client: httpx.Client) -> list[str]:
     if response.status_code >= 400:
         return []
     found: list[str] = []
-    for line in response.text.splitlines():
-        if line.strip().lower().startswith("sitemap:"):
-            url = line.split(":", 1)[1].strip()
-            if url and url not in found:
-                found.append(url)
+    for url in Protego.parse(response.text).sitemaps:
+        if url and url not in found:
+            found.append(url)
     return found
 
 
