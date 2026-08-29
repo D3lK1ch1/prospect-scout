@@ -613,6 +613,29 @@ class BrokenLinkSignalTests(unittest.TestCase):
         self.assertFalse(any(f.kind == "broken_link_signal" for f in result.findings))
 
     @patch("scout.research.discover_sitemap_pages")
+    def test_a_sitemap_sourced_image_link_is_not_flagged_as_broken(self, discover):
+        # Confirmed real false positive (accelit.com.au, ideabox.com.au): a
+        # sitemap/homepage link to an image loads fine (200) but isn't HTML -
+        # that's not evidence of a dead link, just not usable page text.
+        discover.return_value = ["https://acme.test/case-studies/photo.jpg"]
+        pages = {
+            "https://acme.test": fetched("https://acme.test", "<p>Melbourne VIC Australia</p>"),
+            "https://acme.test/case-studies/photo.jpg": FetchResult(
+                "https://acme.test/case-studies/photo.jpg",
+                status=200,
+                error="not an HTML page (content-type: image/jpeg)",
+            ),
+        }
+
+        result = analyse_company(
+            "https://acme.test", self.request,
+            fetch=lambda url: pages.get(url, FetchResult(url, error="404 not found")),
+            profile=self.profile,
+        )
+
+        self.assertFalse(any(f.kind == "broken_link_signal" for f in result.findings))
+
+    @patch("scout.research.discover_sitemap_pages")
     def test_broken_link_never_takes_the_findings_zero_slot(self, discover):
         # A real role finding must still win first slot and decide
         # eligibility, even when a broken link was also found.

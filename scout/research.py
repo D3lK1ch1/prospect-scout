@@ -567,7 +567,11 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
     for url in evidence_urls(homepage.final_url or domain, homepage.html or "", profile, boost_terms=all_terms):
         page = fetch(url)
         if not page.ok:
-            if url not in guessed_paths:
+            # A response with a successful status that merely isn't HTML
+            # (e.g. an image the sitemap/homepage linked to) loaded fine -
+            # it's not evidence of a dead link, just not usable as page text.
+            genuinely_broken = page.status is None or page.status >= 400
+            if genuinely_broken and url not in guessed_paths:
                 broken_links.append(Finding(
                     kind="broken_link_signal",
                     evidence=f"A link found via this site's own sitemap or homepage failed to load: {url} ({page.error}).",
