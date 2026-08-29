@@ -113,27 +113,28 @@ def _candidate_tags(profile_id: str | None) -> tuple[tuple[str, str | None], ...
 def query_overpass(bbox: BoundingBox, profile_id: str | None = None) -> list[dict]:
     """Query Overpass for businesses matching the profile's OSM tags (or the
     unfiltered office=* fallback when no profile is given) with a website tag
-    inside bbox. [] on error.
+    inside bbox. [] on error, one query per tag pair.
     """
     box = f"{bbox.south},{bbox.west},{bbox.north},{bbox.east}"
-    clauses = []
-    for key, value in _candidate_tags(profile_id):
-        tag_filter = f'["{key}"]' if value is None else f'["{key}"="{value}"]'
-        for element_type in ("node", "way"):
-            for website_tag in ("website", "contact:website"):
-                clauses.append(f'{element_type}{tag_filter}["{website_tag}"]({box});')
-    query = f"[out:json][timeout:25];({''.join(clauses)});out center;"
-    _throttle()
-    try:
-        with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SECONDS) as client:
-            response = client.post(OVERPASS_URL, content=query, headers={"Content-Type": "text/plain"})
-    except httpx.HTTPError:
-        return []
-
-    if response.status_code >= 400:
-        return []
-
-    return response.json().get("elements", [])
+    elements: list[dict] = []
+    with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SECONDS) as client:
+        for key, value in _candidate_tags(profile_id):
+            tag_filter = f'["{key}"]' if value is None else f'["{key}"="{value}"]'
+            clauses = [
+                f'{element_type}{tag_filter}["{website_tag}"]({box});'
+                for element_type in ("node", "way")
+                for website_tag in ("website", "contact:website")
+            ]
+            query = f"[out:json][timeout:25];({''.join(clauses)});out center;"
+            _throttle()
+            try:
+                response = client.post(OVERPASS_URL, content=query, headers={"Content-Type": "text/plain"})
+            except httpx.HTTPError:
+                continue
+            if response.status_code >= 400:
+                continue
+            elements.extend(response.json().get("elements", []))
+    return elements
 
 
 def parse_to_domains(elements: list[dict]) -> list[str]:

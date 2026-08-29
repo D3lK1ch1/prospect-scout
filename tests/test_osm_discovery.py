@@ -122,11 +122,37 @@ class QueryOverpassTests(unittest.TestCase):
     @patch("scout.osm_discovery.time.sleep")
     @patch("scout.osm_discovery.httpx.Client")
     def test_returns_elements_on_success(self, client_factory, _sleep):
+        # No profile_id -> the 3-tag-pair fallback set, one request each; the
+        # stub returns the same 4-element fixture for every call, so raw
+        # elements come back 3x (12) - parse_to_domains, not query_overpass,
+        # is what dedups in real usage (see query_overpass's own docstring).
         client_factory.return_value = StubClient(json_response("https://overpass-api.de/api/interpreter", method="POST", payload=OVERPASS_FIXTURE))
 
         elements = query_overpass(self.bbox)
 
-        self.assertEqual(len(elements), 4)
+        self.assertEqual(len(elements), 12)
+
+    @patch("scout.osm_discovery.time.sleep")
+    @patch("scout.osm_discovery.httpx.Client")
+    def test_one_tag_pairs_request_failing_does_not_blank_out_the_others(self, client_factory, _sleep):
+        """Splitting into per-tag-pair requests means a single failing
+        tag doesn't take the rest down with it"""
+        stub = StubClient(json_response("https://overpass-api.de/api/interpreter", method="POST", payload=OVERPASS_FIXTURE))
+        client_factory.return_value = stub
+        real_post = stub.post
+        calls = {"n": 0}
+
+        def flaky_post(url, content=None, headers=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ReadTimeout("timed out")
+            return real_post(url, content=content, headers=headers)
+
+        stub.post = flaky_post
+
+        elements = query_overpass(self.bbox)  # fallback set: 3 tag pairs, 1 fails
+
+        self.assertEqual(len(elements), 8)  # 2 successful tag pairs x 4 elements each
 
     @patch("scout.osm_discovery.time.sleep")
     @patch("scout.osm_discovery.httpx.Client")
@@ -150,11 +176,13 @@ class QueryOverpassTests(unittest.TestCase):
 
         query_overpass(self.bbox)
 
-        sent_query = stub.calls[0][2]
-        self.assertIn('"office"', sent_query)
-        self.assertIn('"amenity"="library"', sent_query)
-        self.assertIn('"amenity"="research_institute"', sent_query)
-        self.assertNotIn("university", sent_query)
+        # One request per tag pair now - check the set of sent queries, not just the first.
+        self.assertEqual(len(stub.calls), 3)  # unfiltered office + 2 universal amenities
+        sent_queries = [call[2] for call in stub.calls]
+        self.assertTrue(any('"office"]' in query for query in sent_queries))
+        self.assertTrue(any('"amenity"="library"' in query for query in sent_queries))
+        self.assertTrue(any('"amenity"="research_institute"' in query for query in sent_queries))
+        self.assertTrue(all("university" not in query for query in sent_queries))
 
     @patch("scout.osm_discovery.time.sleep")
     @patch("scout.osm_discovery.httpx.Client")
@@ -164,8 +192,8 @@ class QueryOverpassTests(unittest.TestCase):
 
         query_overpass(self.bbox, profile_id="not-a-real-profile")
 
-        sent_query = stub.calls[0][2]
-        self.assertIn('"office"]', sent_query)
+        sent_queries = [call[2] for call in stub.calls]
+        self.assertTrue(any('"office"]' in query for query in sent_queries))
 
     @patch("scout.osm_discovery.time.sleep")
     @patch("scout.osm_discovery.httpx.Client")
@@ -175,13 +203,17 @@ class QueryOverpassTests(unittest.TestCase):
 
         query_overpass(self.bbox, profile_id="technology")
 
-        sent_query = stub.calls[0][2]
-        self.assertIn('"office"="it"', sent_query)
-        self.assertIn('"office"="research"', sent_query)
-        self.assertIn('"shop"="computer"', sent_query)
-        self.assertIn('"amenity"="library"', sent_query)
+        sent_queries = [call[2] for call in stub.calls]
+        self.assertTrue(any('"office"="it"' in query for query in sent_queries))
+        self.assertTrue(any('"office"="research"' in query for query in sent_queries))
+        self.assertTrue(any('"shop"="computer"' in query for query in sent_queries))
+        self.assertTrue(any('"amenity"="library"' in query for query in sent_queries))
         # Narrowed: the unfiltered `["office"]` wildcard (no `=value`) must be gone.
-        self.assertNotIn('"office"]', sent_query)
+        self.assertTrue(all('"office"]' not in query for query in sent_queries))
+        # Each request stays small - one tag pair's clauses, not all combined
+        # (the actual fix: a 68-clause single request timed out live, 2026-08-21).
+        self.assertTrue(all(query.count("[out:json]") == 1 for query in sent_queries))
+        self.assertEqual(len(stub.calls), 17)  # 15 technology-specific tag pairs + 2 universal amenities
 
 
 class ParseToDomainsTests(unittest.TestCase):
