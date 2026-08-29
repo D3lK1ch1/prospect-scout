@@ -3,6 +3,61 @@
 Notable changes to this project. Dated, not version-numbered — nothing's
 been tagged or released yet.
 
+## 2026-08-29 — Broken-link false positive fixed, Overpass batched, technology tag list corrected
+
+### Fixed
+
+- `scout/research.py:analyse_company()` — `broken_link_signal` was firing on
+  any non-HTML fetch response, even a successful one (e.g. a sitemap-linked
+  image). Confirmed false positive on two real domains (`accelit.com.au`,
+  `ideabox.com.au`) — both loaded fine (200), they just weren't HTML. Now
+  only a genuine failure (no response, or a 4xx/5xx status) counts as
+  broken. Added `test_a_sitemap_sourced_image_link_is_not_flagged_as_broken`
+  to `tests/test_research.py`, modeled directly on the confirmed case.
+
+### Changed
+
+- `scout/osm_discovery.py:query_overpass()` — batches the technology
+  profile's tag pairs into groups of `_BATCH_SIZE = 4` per Overpass request
+  instead of one request per tag pair, cutting a technology-profile search
+  from 16 sequential requests to 4. Batch size is live-trial-confirmed
+  against the exact Melbourne bbox the code resolves (2026-08-29): 4 tag
+  pairs (16 clauses) succeeded in 14.7s with real margin; 8 succeeded but at
+  24.0s, too close to the 25s timeout to trust; 12 and 16 both timed out
+  outright, consistent with the original 68-clause failure (2026-08-21).
+  This is the confirmed middle ground between that single-mega-query
+  failure and the one-request-per-tag-pair fix that followed it —
+  parallelizing the requests instead was considered and rejected
+  (`docs/SESSION_NOTE_1.md`, 2026-08-21: Overpass's shared public instance
+  is the real constraint, not round-trip count).
+- `scout/osm_discovery.py:_PROFILE_TAGS["technology"]` — dropped
+  `office=software` (confirmed 0 Melbourne hits per RESEARCH.md; a company
+  already self-tagged as software doesn't need the profile's separate
+  "hidden tech team inside a generic office" goal either). Corrected the
+  module comment, which wrongly attributed all 15 tags to one RESEARCH.md
+  session — only 4 are from there; the other 10 generic office tags
+  (`company`, `financial`, `consulting`, etc.) were added later for the
+  BHP/Case-03 reasoning documented in `docs/case-study.html`, and that
+  reasoning wasn't written down anywhere in code until now.
+- `tests/test_osm_discovery.py` updated for the new batch counts and tag
+  list; the "one failing request doesn't blank the others" test now
+  exercises the technology profile's multiple batches instead of the
+  3-tag-pair fallback set, which no longer produces more than one batch.
+
+144/144 tests pass.
+
+## 2026-08-21 — Sitemap discovery now uses Protego's `.sitemaps` property
+
+### Changed
+
+- `scout/sitemap.py:_sitemaps_from_robots()` — replaced hand-rolled
+  `Sitemap:` line parsing with Protego's `.sitemaps` property, the same
+  RFC 9309-compliant parser `scout/fetcher.py:robots_allows()` already uses
+  for the Protego swap (`docs/SESSION_NOTE_1.md`, 2026-08-13), instead of a
+  second, separately-maintained parse of the same `robots.txt` file.
+  Behavior preserved exactly: empty list when no sitemap is declared,
+  order-preserving dedup on the returned URLs. All 142 tests pass unchanged.
+
 ## 2026-08-11 — Web app narrowed to the technology profile
 
 ### Changed

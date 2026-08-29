@@ -11,8 +11,6 @@ Both paths share the same scanning logic: career-page role matching, sector-awar
 
 **Known limitation, worth reading before relying on the web app's search:** OpenStreetMap doesn't have every company mapped — it's confirmed to miss real, currently-hiring businesses, including some large ones. It's a genuinely useful *widening* of what you'd find by hand, not a guarantee of completeness. A second discovery adapter (Australian Business Register data) is in design to help close that gap.
 
-The narrowed product boundary, evidence rules, delivery slices, and acceptance criteria are in [docs/MVP_SPEC.md](docs/MVP_SPEC.md).
-
 ## Setup
 
 From the `prospect-scout` folder:
@@ -73,8 +71,6 @@ A matching role on a careers/vacancies page is an active signal; a matching term
 
 Profiles live in [scout/profiles.json](scout/profiles.json). You can add or amend preset profiles there, or use Custom for a one-off run.
 
-The project stays provider-agnostic by design: no AI/search provider is required or hardcoded, and every external provider is opt-in via configuration.
-
 ## Tests
 
 The current offline tests require no additional framework and make no live network calls:
@@ -82,9 +78,3 @@ The current offline tests require no additional framework and make no live netwo
 ```bash
 python -m unittest discover -s tests -v
 ```
-
-See the acceptance-test table in the MVP specification for the tests required before each later delivery slice is complete.
-
-## Privacy and etiquette
-
-Runs locally and shares nothing. The fetcher honours `robots.txt`, identifies itself with an honest user agent, and never bypasses access controls or logs in anywhere — some sites (particularly ones behind aggressive bot-protection) will simply come back unreachable rather than being worked around. Any outreach is written and sent by you by hand; this tool never emails anyone, and no AI model ever drafts outreach text — reports surface evidence and suggestions, the appeal is yours to write.
