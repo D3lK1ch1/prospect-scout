@@ -70,6 +70,25 @@ class SuggestOutreachPointsTests(unittest.TestCase):
         self.assertIn("tentative", points)
         self.assertNotIn(finding.evidence, points)
 
+    def test_potential_role_related_need_with_no_contact_gives_ask_size_guidance_not_a_repeat(self):
+        # No contact found: repeating finding.suggestion here would just
+        # duplicate the report's "Suggested next step" line for no new
+        # value ( "small ask, not a job ask" guidance instead - 
+        # the tip that actually fits this situation).
+        finding = Finding(
+            kind="potential_role_related_need",
+            evidence="The company site contains public business information consistent with the professional services sector; no matching Technology and digital delivery role was found in scanned pages.",
+            source_url="https://acme.test",
+            confidence="low",
+            suggestion="No evidence of a dedicated technical or leadership role was found on this site - confirm one exists before assuming a technology and digital delivery need here.",
+        )
+
+        points = suggest_outreach_points(finding)
+
+        self.assertNotIn(finding.suggestion, points)
+        self.assertIn("small ask", points)
+        self.assertNotIn(finding.evidence, points)
+
     def test_unknown_finding_kind_returns_none_not_a_crash(self):
         finding = Finding(kind="some_future_kind", evidence="x", source_url="https://acme.test", confidence="low", suggestion="x")
 

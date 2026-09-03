@@ -41,12 +41,27 @@ def suggest_outreach_points(finding: Finding) -> str | None:
     doesn't apply to (e.g. team_contact_signal).
     """
     if finding.kind == "potential_role_related_need":
-        # finding.suggestion here is already contact/MSP-aware and specific
-        # to this company (see hidden_need_finding()) - only the framing tip
-        # is added, not a repeat of the evidence sentence (which is
-        # hidden_need_finding()'s own meta-commentary, not real site content -
-        # see the earlier confirmed bug this avoided).
-        return f"{finding.suggestion} Keep this one tentative - lead with genuine curiosity, not a claim that a need exists."
+        # A found contact is itself the most useful outreach detail here -
+        # "be specific to whom you are reaching out" -
+        # so that branch's suggestion (contact/MSP-aware, see
+        # hidden_need_finding()) is still worth repeating with the framing
+        # tip added on top.
+        if "A likely technical contact was already found" in finding.suggestion:
+            return f"{finding.suggestion} Keep this one tentative - lead with genuine curiosity, not a claim that a need exists."
+        # No contact and no confirmed role: repeating hidden_need_finding()'s
+        # evidence-interpretation text here would just duplicate "Suggested
+        # next step" in the report for no new value. 
+        # Actual guidance for this exact situation is about ask size, not
+        # evidence: "ask for a small favour... instead of asking for a job,
+        # ask for a coffee catchup... asking for too much can seem
+        # confrontational."
+        return (
+            "No confirmed opening exists yet, so per cold-email best practice this "
+            "calls for a small ask, not a job ask: request a short conversation "
+            "(a quick call or coffee chat) to learn how they currently handle this, "
+            "not a role - asking for too much before real evidence exists reads as "
+            "presumptuous, not confident."
+        )
     pointer_template = _KIND_POINTERS.get(finding.kind)
     if pointer_template is None:
         return None
