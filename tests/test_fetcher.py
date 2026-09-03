@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import httpx
 
+import scout.fetcher
 from scout.fetcher import FetchResult, robots_allows
 
 
@@ -116,6 +117,63 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result, 1)
         fetch.assert_not_called()
         self.assertIn("Include http:// or https://", output.getvalue())
+
+
+class CrawlDelayTests(unittest.TestCase):
+    """_wait_for_crawl_delay() tested directly against a mocked clock - no
+    real sleeping, so this stays fast and deterministic regardless of the
+    delay value used.
+    """
+
+    def setUp(self):
+        scout.fetcher._LAST_REQUEST_AT.clear()
+
+    def test_first_request_to_a_host_never_waits(self):
+        with patch("scout.fetcher.time.monotonic", return_value=100.0), patch("scout.fetcher.time.sleep") as sleep:
+            scout.fetcher._wait_for_crawl_delay("example.test", 10.0)
+
+        sleep.assert_not_called()
+        self.assertEqual(scout.fetcher._LAST_REQUEST_AT["example.test"], 100.0)
+
+    def test_second_request_inside_the_delay_window_sleeps_for_the_remainder(self):
+        # 100.0: first call claims this instant. 100.05: second call arrives
+        # 0.05s later, so 0.15s remains of the 0.2s delay. 100.2: the recheck
+        # after the (mocked) sleep, simulating that the sleep occurred.
+        clock = iter([100.0, 100.05, 100.2])
+        with patch("scout.fetcher.time.monotonic", side_effect=lambda: next(clock)), patch("scout.fetcher.time.sleep") as sleep:
+            scout.fetcher._wait_for_crawl_delay("example.test", 0.2)
+            scout.fetcher._wait_for_crawl_delay("example.test", 0.2)
+
+        sleep.assert_called_once()
+        self.assertAlmostEqual(sleep.call_args[0][0], 0.15, places=5)
+
+    @patch("scout.fetcher.httpx.Client")
+    def test_fetch_page_honours_a_declared_crawl_delay(self, client_factory):
+        from scout.fetcher import fetch_page
+
+        robots = response("https://example.test/robots.txt", text="User-agent: *\nCrawl-delay: 7")
+        page = response("https://example.test/a", text="<html>ok</html>", headers={"content-type": "text/html"})
+        client = StubClient(responses={"https://example.test/robots.txt": robots, "https://example.test/a": page})
+        client_factory.return_value = client
+
+        with patch("scout.fetcher._wait_for_crawl_delay") as wait:
+            fetch_page("https://example.test/a")
+
+        wait.assert_called_once_with("example.test", 7.0)
+
+    @patch("scout.fetcher.httpx.Client")
+    def test_fetch_page_never_waits_when_no_delay_is_declared(self, client_factory):
+        from scout.fetcher import fetch_page
+
+        robots = response("https://example.test/robots.txt", text="User-agent: *\nDisallow:")
+        page = response("https://example.test/a", text="<html>ok</html>", headers={"content-type": "text/html"})
+        client = StubClient(responses={"https://example.test/robots.txt": robots, "https://example.test/a": page})
+        client_factory.return_value = client
+
+        with patch("scout.fetcher._wait_for_crawl_delay") as wait:
+            fetch_page("https://example.test/a")
+
+        wait.assert_not_called()
 
 
 if __name__ == "__main__":

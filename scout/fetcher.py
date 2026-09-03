@@ -8,6 +8,8 @@ beyond what politeness requires; that's Unit 2's job.
 
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
@@ -45,11 +47,27 @@ def _robots_url(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, "/robots.txt", "", ""))
 
 
-def robots_allows(url: str, client: httpx.Client) -> bool:
-    """True if the site's robots.txt permits fetching `url`.
+def _fetch_robots(url: str, client: httpx.Client) -> Protego | None:
+    """Fetch and parse `url`'s robots.txt, or None if missing/unreachable.
 
     A missing or unreachable robots.txt counts as permission (the accepted
-    convention for 4xx/no-file), but any explicit rule is honored.
+    convention for 4xx/no-file) - callers treat None as "allow everything, no
+    declared crawl delay." This fetch itself is never throttled by a
+    previously-seen Crawl-delay: the delay value lives inside the file being
+    fetched, so honoring it here would mean waiting on information not yet
+    read (chicken-and-egg on a host's very first request this run).
+    """
+    try:
+        response = client.get(_robots_url(url))
+    except httpx.HTTPError:
+        return None
+    if response.status_code >= 400:
+        return None
+    return Protego.parse(response.text)
+
+
+def robots_allows(url: str, client: httpx.Client) -> bool:
+    """True if the site's robots.txt permits fetching `url`.
 
     Uses Protego rather than stdlib's urllib.robotparser, which only
     implements the 1996 draft and has no support for the `*`/`$` wildcard
@@ -58,15 +76,38 @@ def robots_allows(url: str, client: httpx.Client) -> bool:
     itself adopted as its default for the same reason. Note the flipped
     argument order versus stdlib: url first, user agent second.
     """
-    try:
-        response = client.get(_robots_url(url))
-    except httpx.HTTPError:
+    parser = _fetch_robots(url, client)
+    if parser is None:
         return True
-    if response.status_code >= 400:
-        return True
-
-    parser = Protego.parse(response.text)
     return parser.can_fetch(url, USER_AGENT)
+
+
+# Per-host "last request sent at" timestamps, shared across every fetch_page()
+# call in this process. run_research() can fetch several companies' domains
+# concurrently, so this is lock-guarded rather than a
+# plain dict - two threads racing to fetch the same host must still end up
+# spaced apart by that host's own declared Crawl-delay, not both slip through
+# at once.
+_LAST_REQUEST_AT: dict[str, float] = {}
+_LAST_REQUEST_LOCK = threading.Lock()
+
+
+def _wait_for_crawl_delay(host: str, delay: float) -> None:
+    """Block until at least `delay` seconds have passed since the last
+    request to `host` was sent, then claim this moment as the new "last
+    request" before releasing the lock - so a second thread that wakes up
+    from the same wait recomputes against the claim just made, instead of
+    both proceeding together.
+    """
+    while True:
+        with _LAST_REQUEST_LOCK:
+            last = _LAST_REQUEST_AT.get(host)
+            now = time.monotonic()
+            if last is None or now - last >= delay:
+                _LAST_REQUEST_AT[host] = now
+                return
+            remaining = delay - (now - last)
+        time.sleep(remaining)
 
 
 def fetch_page(url: str) -> FetchResult:
@@ -76,8 +117,13 @@ def fetch_page(url: str) -> FetchResult:
         timeout=TIMEOUT_SECONDS,
         follow_redirects=True,
     ) as client:
-        if not robots_allows(url, client):
+        parser = _fetch_robots(url, client)
+        if parser is not None and not parser.can_fetch(url, USER_AGENT):
             return FetchResult(url, error="robots.txt disallows fetching this page")
+
+        delay = parser.crawl_delay(USER_AGENT) if parser is not None else None
+        if delay:
+            _wait_for_crawl_delay(urlsplit(url).netloc, delay)
 
         try:
             response = client.get(url)
