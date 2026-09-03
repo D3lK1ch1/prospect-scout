@@ -1,10 +1,24 @@
 # Prospect Scout MVP specification
 
+Canonical for current boundary, constraints, and status. If another doc
+(README, a session note, a draft spec) appears to say something different
+about what's currently true or allowed, this file wins.
+
 ## Purpose
 
 Given a location and technical interests, identify publicly visible companies that are plausible prospects, collect **verifiable** case-study and technical-need signals, and create a local report for human review before outreach.
 
 This is a research aid, not a lead-generation guarantee: a search can return zero eligible companies when public sources lack evidence. It must never invent a company, case study, problem, or contact detail.
+
+## Constraints
+
+These apply everywhere in the project, not just to the MVP boundary below.
+
+- **No hardcoded or paid search/AI provider.** Every external provider (search, AI) is opt-in via configuration, never required, never embedded with credentials. A no-provider/local-only mode always works with zero config.
+- **No AI-drafted outreach, no AI-generated claims without source evidence.** Every finding is deterministic and traceable to a specific fetched page. Reports surface evidence and a suggested next step; the appeal itself is written by the human, by hand.
+- **`robots.txt` is honoured, never bypassed.** No access-control bypass, no login walls, no CAPTCHA defeat. Sites that block the fetcher are recorded as unreachable, not worked around.
+- **No bulk/background crawling, no contact discovery, no CRM integration, no automatic outreach.** The tool never emails or contacts a company; it produces a local report for human review.
+- **Runs locally, shares nothing.** No telemetry, no remote storage of results.
 
 ## MVP boundary
 
@@ -30,9 +44,10 @@ It produces one Markdown report and a machine-readable JSON companion. Each cand
 
 ### Excluded from the MVP
 
-- Job-board/LinkedIn scraping, authenticated sources, or robots-disallowed sites.
-- Automatic outreach, contact discovery, CRM integration, bulk/background crawling, or AI-generated claims without source evidence.
+- Job-board/LinkedIn scraping specifically
 - A guarantee of finding every company in an area.
+
+(See Constraints above for the rules that apply everywhere, not just to this boundary.)
 
 ## Data and evidence contract
 
@@ -60,31 +75,34 @@ Rank eligible companies by location confidence, requested-interest relevance, ev
 ## Architecture
 
 ```text
-CLI wizard / non-interactive command
+CLI wizard / non-interactive command      Web app (city/state/country + role terms)
         -> ResearchRequest (location + target roles)
         -> selected preset/custom research profile
-        -> supplied domain-list adapter
+        -> discovery adapter:
+             - supplied domain-list adapter (CLI, always available)
+             - OpenStreetMap adapter (web app; Nominatim geocode + Overpass candidates)
         -> polite fetcher -> homepage + up to five career URLs
+             (sitemap-first discovery, homepage-link fallback)
         -> deterministic scanner (role, sector, location evidence)
         -> eligibility decision + cautious opportunity hypothesis
         -> local Markdown + JSON report
 ```
 
-Profiles are data, stored in `scout/profiles.json`, not scanner branches. A profile defines role terms, relevant page labels/URL words, bounded fallback paths, and a cautious opportunity prompt. The Custom UI option creates the same profile shape for one run. The domain-list adapter is intentionally the only discovery adapter today. A future search-provider adapter may add candidates, but must yield the same normalised domain records and may not bypass provider terms or robots controls.
+Profiles are data, stored in `scout/profiles.json`, not scanner branches. A profile defines role terms, relevant page labels/URL words, bounded fallback paths, and a cautious opportunity prompt. The Custom UI option creates the same profile shape for one run. A future search-provider adapter may add candidates, but must yield the same normalised domain records and may not bypass provider terms or robots controls.
 
-## Delivery slices
+## Current status
 
-1. **Foundation (complete):** URL validation and polite single-page HTML fetcher.
-2. **Research model (complete):** typed records, local JSON/Markdown writer, fixtures, and interactive/non-interactive CLI validation.
-3. **Domain-list input adapter (complete):** one URL/domain per line, normalisation, and deduplication.
-4. **Career-first evidence (complete):** bounded careers-page discovery, technology case-study scanning, deterministic role matching, location check, sector classification, and eligibility decisions.
-5. **Next:** terms-compliant location-aware search-provider adapter, stronger page diagnostics, case-study-specific signals, and ranking across verified candidates.
+Full dated history of what's shipped lives in [CHANGELOG.md](../CHANGELOG.md) — this section states the current boundary only, not a second change log.
 
-Each slice must be usable independently and must not turn lack of data into a positive result.
+- Foundation, research model, domain-list adapter, and career-first evidence scanning: shipped and tested.
+- OpenStreetMap discovery adapter (city/state/country -> candidate companies, no domain list needed): shipped, wired into both the CLI and the web app.
+- Second discovery adapter (Australian Business Register): drafted, deliberately paused
+- AI-drafted outreach button: drafted, not started - for potential agentification for more specific details per company
+- Public web-app deployment: out of scope until the SSRF-allowlist and rate-limiting gaps 
 
 ## Acceptance test plan
 
-| Slice | Must prove |
+| Area | Must prove |
 | --- | --- |
 | Foundation | Invalid URLs fail clearly; robots denial prevents a page fetch; HTTP/non-HTML failures retain diagnostics; valid HTML reaches CLI output. |
 | Research model | City, state, country, and one or more interests are required; invalid limits/outputs fail before network work. |

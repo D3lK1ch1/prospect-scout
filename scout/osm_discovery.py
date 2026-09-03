@@ -67,7 +67,7 @@ def geocode_area(city: str, state: str, country: str) -> BoundingBox | None:
 
 
 # Per-profile OSM tag narrowing, confirmed against real OSM tag documentation
-# and live Melbourne Overpass counts (see RESEARCH.md, 2026-08-04 section) -
+# and live Melbourne Overpass counts -
 # each tuple replaces the old one-size-fits-all `office=*` wildcard for that
 # profile with a bounded set of tag values that actually fit its role terms.
 # Ruled out during that research and deliberately not included: `advertising=*`
