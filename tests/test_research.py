@@ -700,6 +700,34 @@ class MspLanguageSignalTests(unittest.TestCase):
         self.assertNotIn("IT-services/MSP provider", finding.suggestion)
         self.assertIn("No evidence of a dedicated technical or leadership role", finding.suggestion)
 
+    def test_hidden_need_finding_flags_professional_services_technical_ambiguity(self):
+        # Confirmed live against bgprivate.com.au this session: "technical"
+        # in an accounting firm's own job ads means tax/audit domain depth,
+        # never software skill - a real terminology collision this sector
+        # is prone to that other sectors aren't.
+        profile = next(profile for profile in load_profiles() if profile.id == "technology")
+        result = CompanyResult(domain="https://bgprivate.test", name="bgprivate.test", sector="professional services")
+
+        finding = hidden_need_finding(
+            result, "https://bgprivate.test",
+            "Strong technical accounting and advisory expertise required.",
+            profile, contact=None,
+        )
+
+        self.assertIn("usually means domain expertise", finding.suggestion)
+
+    def test_hidden_need_finding_does_not_flag_technical_ambiguity_outside_professional_services(self):
+        profile = next(profile for profile in load_profiles() if profile.id == "technology")
+        result = CompanyResult(domain="https://hotdoc.test", name="hotdoc.test", sector="health")
+
+        finding = hidden_need_finding(
+            result, "https://hotdoc.test",
+            "Always be empathetic. We offer a benefits pyramid and great office photos.",
+            profile, contact=None,
+        )
+
+        self.assertNotIn("usually means domain expertise", finding.suggestion)
+
 
 class HiddenNeedFindingIntegrationTests(unittest.TestCase):
     """analyse_company() now discovers the team contact before deciding how

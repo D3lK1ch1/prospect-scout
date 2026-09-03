@@ -442,6 +442,13 @@ def hidden_need_finding(
             "businesses (\"managed IT support\"/\"IT help desk\"/\"virtual CIO\"-style phrasing), "
             "not a company running its own product engineering team - treat this as a weaker lead."
         )
+    if result.sector == "professional services":
+        parts.append(
+            "This is a professional-services site (accounting/legal/consulting-type sector) - "
+            "\"technical\" in this sector's own job ads and copy usually means domain expertise "
+            "(tax/audit/accounting depth), not software skill; confirm which meaning is meant "
+            "before treating any \"technical\" language here as tech-hiring evidence."
+        )
     if contact is not None:
         parts.append(
             f"{profile.opportunity_prompt} A likely technical contact was already found on "
