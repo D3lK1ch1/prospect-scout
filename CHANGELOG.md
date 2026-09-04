@@ -3,6 +3,77 @@
 Notable changes to this project. Dated, not version-numbered — nothing's
 been tagged or released yet.
 
+## 2026-09-04 — Two confirmed evidence-extraction bugs fixed
+
+### Fixed
+
+- `scout/research.py:page_text()` — a theme's mobile off-canvas menu built as
+  `<div role="navigation">` (not a real `<nav>` element) escaped the existing
+  tag-name-only chrome stripping entirely. Confirmed real leak on
+  `ideabox.com.au`: the same site-wide nav text ("Artificial Intelligence
+  Developers Australia", "IoT Solutions", ... "About") matched a requested
+  role term on every page, producing an identical, uninformative
+  `case_study_role_signal` excerpt for three different case-study URLs
+  regardless of each page's real content. `page_text()` now also decomposes
+  any element carrying `role="navigation"`, alongside the existing tag-name
+  and skip-link-class stripping. `tests/test_research.py` gained
+  `test_strips_div_based_nav_marked_only_by_aria_role`, modeled directly on
+  the confirmed HTML shape.
+- `scout/research.py:analyse_company()` — location verification only ever
+  checked the homepage's own text so a company whose real office address sits on a `/careers` or `/locations` page instead of `/` was wrongly downgraded to `needs_review` even with the address already sitting in already-fetched HTML. `location_is_verified()` is now also checked against every evidence page and team page already fetched in
+  the same run — no new network calls, no change to the literal city/state/country matching itself, just applied to more of the real evidence. The "not verified" limitation is now only recorded once every fetched page has been checked, and its wording no longer implies the homepage was the only page consulted. Two new tests in `tests/test_research.py` cover both the recovered-on-a-later-page case and the still-genuinely-unverified case.
+
+### Changed
+
+- `README.md` — restored three pieces of content dropped by an unrelated
+  2026-08-29 commit (`b224317`): the link to `docs/MVP_SPEC.md`, the
+  "provider-agnostic by design" line, and the entire "Privacy and etiquette"
+  section. Also documented the `/inspect` specific-company search mode for
+  the first time — it's been live in `scout/webapp.py` since the
+  widespread/specific-company split shipped, but the README never mentioned
+  it existed.
+
+154/154 tests pass.
+
+## 2026-09-03 — Crawl-delay honoured, sector-aware "technical" caveat, more specific cold-email framing
+
+### Added
+
+- `scout/fetcher.py` — `robots.txt`'s declared `Crawl-delay` is now read and
+  honoured, not just its allow/disallow rules. Per-host "last request sent
+  at" timestamps are lock-guarded (`_LAST_REQUEST_AT`, `_LAST_REQUEST_LOCK`)
+  so two companies' fetches running concurrently under `run_research()`'s
+  worker pool (`docs/KNOWN_GAPS.md` #7) can't both slip through the same
+  host's delay window at once. `tests/test_fetcher.py` gained coverage for
+  the wait itself and for concurrent callers being serialized correctly.
+- `scout/research.py:hidden_need_finding()` — a `professional services`
+  sector now gets its own caveat: "technical" in that sector's own job ads
+  and copy usually means tax/audit/domain depth, not software skill, and the
+  finding says so before treating any such mention as tech-hiring evidence.
+  Confirmed live against a real Melbourne accounting firm (BG Private) —
+  five of its own pages used "technical" this way — see `docs/case-study.html`,
+  2026-09-02 entry.
+
+### Changed
+
+- `scout/outreach.py:suggest_outreach_points()` — the `potential_role_related_need`
+  branch no longer gives the same framing regardless of whether a contact
+  was found. With a contact, it still repeats `hidden_need_finding()`'s
+  contact-aware suggestion plus a "keep this tentative" note. With no
+  contact and no confirmed role, it now gives real cold-email guidance
+  instead of repeating the report's own "Suggested next step" verbatim: a
+  small ask (a short call or coffee chat) rather than a job ask, sourced
+  from cold email tips.
+- `docs/MVP_SPEC.md` — restructured as the canonical boundary/constraints
+  document (a `## Constraints` section now states the rules that apply
+  everywhere, not just to the MVP boundary; `## Current status` replaces the
+  old, now-stale `## Delivery slices` list and points to `CHANGELOG.md` for
+  full history instead of duplicating it). `scout/osm_discovery.py`'s
+  `_PROFILE_TAGS` comment corrected to stop citing `RESEARCH.md`'s
+  2026-08-04 section for tag choices that were actually added later.
+
+151/151 tests pass (with `protego` installed — see `requirements.txt`).
+
 ## 2026-08-29 — Broken-link false positive fixed, Overpass batched, technology tag list corrected
 
 ### Fixed
