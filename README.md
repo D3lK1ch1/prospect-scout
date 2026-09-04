@@ -2,14 +2,17 @@
 
 A private, locally run research aid for finding evidence-backed company prospects and suggesting technical work worth investigating. Results stay local and the tool never contacts companies.
 
-**Current status:** two ways to run a search.
+**Current status:** three ways to run a search.
 
-- **Web app** (`scout/webapp.py`) — give it a city, state, country, and optional role terms; it finds candidate companies itself via OpenStreetMap (geocode the location, then query nearby offices, libraries, and research institutes), scans each one's own sitemap for case-study/blog/career pages (falling back to scanning the homepage's own links if no sitemap exists), and shows full results in the browser — every finding's evidence, source link, confidence, and suggestion, ranked highest-priority first with the reasons why. No domain list required. Scoped to the technology profile only, to keep this entry point focused. Researches up to 250 candidates per run, across companies concurrently (each individual company is still fetched politely/sequentially) so a wide run finishes in minutes rather than tens of minutes.
+- **Web app, widespread search** (`scout/webapp.py`, `/`) — give it a city, state, country, and optional role terms; it finds candidate companies itself via OpenStreetMap (geocode the location, then query nearby offices, libraries, and research institutes), scans each one's own sitemap for case-study/blog/career pages (falling back to scanning the homepage's own links if no sitemap exists), and shows full results in the browser — every finding's evidence, source link, confidence, and suggestion, ranked highest-priority first with the reasons why. No domain list required. Scoped to the technology profile only, to keep this entry point focused. Researches up to 250 candidates per run, across companies concurrently (each individual company is still fetched politely/sequentially) so a wide run finishes in minutes rather than tens of minutes.
+- **Web app, specific company** (`scout/webapp.py`, `/inspect`) — already know the company you want to check? Paste its URL directly and skip discovery and the location check entirely. Runs the exact same evidence pipeline as the widespread search (same finding types, same depth) against that one domain — it's not a lighter version, just a different way to choose who gets scanned.
 - **Command line** (`python -m scout`) — the original workflow: still offers every profile in `scout/profiles.json` (including a custom one), but you supply a text file of company domains yourself rather than the tool discovering them.
 
-Both paths share the same scanning logic: career-page role matching, sector-aware cautious hidden-need ideas where no matching role is found, and a deterministic check for leftover editorial artifacts in a homepage's `<title>` tag (e.g. `"(Copy)"`, `"Untitled"`). Both write local Markdown/JSON reports.
+All three paths share the same scanning logic: career-page role matching, sector-aware cautious hidden-need ideas where no matching role is found, and a deterministic check for leftover editorial artifacts in a homepage's `<title>` tag (e.g. `"(Copy)"`, `"Untitled"`). All three write local Markdown/JSON reports.
 
-**Known limitation, worth reading before relying on the web app's search:** OpenStreetMap doesn't have every company mapped — it's confirmed to miss real, currently-hiring businesses, including some large ones. It's a genuinely useful *widening* of what you'd find by hand, not a guarantee of completeness. A second discovery adapter (Australian Business Register data) is in design to help close that gap.
+**Known limitation, worth reading before relying on the web app's widespread search:** OpenStreetMap doesn't have every company mapped — it's confirmed to miss real, currently-hiring businesses, including some large ones. It's a genuinely useful *widening* of what you'd find by hand, not a guarantee of completeness. A second discovery adapter (Australian Business Register data) is in design to help close that gap.
+
+The narrowed product boundary, evidence rules, delivery slices, and acceptance criteria are in [docs/MVP_SPEC.md](docs/MVP_SPEC.md).
 
 ## Setup
 
@@ -33,6 +36,10 @@ uvicorn scout.webapp:app --reload
 Then open `http://127.0.0.1:8000/` in a browser. Fill in city, state, country, and optional role terms, and submit — the technology profile is applied automatically. It geocodes the location, finds nearby candidates, researches up to 250 of them, and shows a results page ranked highest-priority first (eligible before needs-review, location-verified, evidence strength — see "Why ranked here" on each company), with every finding's evidence, source link, confidence, and suggestion shown inline — plus a link to the saved Markdown/JSON report if you want the raw file. Each company involves several polite, sequential fetches to that company's own site; companies are researched several at a time (not one after another) to keep a wide run's total time reasonable.
 
 If no businesses turn up for a location, you'll get a plain message back, not an error — that's an honest "nothing found," not a crash.
+
+### Web app (already know the company — skip discovery)
+
+From the same running server, UI has specific company search instead of the widespread company search. Enter the company's URL and optional role terms; it skips OpenStreetMap discovery and the location check entirely and scans that one company's own site directly with same career/team/case-study page discovery and the same finding types as the widespread search above, just aimed at a company you already picked.
 
 ### Command line
 
@@ -71,6 +78,8 @@ A matching role on a careers/vacancies page is an active signal; a matching term
 
 Profiles live in [scout/profiles.json](scout/profiles.json). You can add or amend preset profiles there, or use Custom for a one-off run.
 
+The project stays provider-agnostic by design: no AI/search provider is required or hardcoded, and every external provider is opt-in via configuration.
+
 ## Tests
 
 The current offline tests require no additional framework and make no live network calls:
@@ -78,3 +87,9 @@ The current offline tests require no additional framework and make no live netwo
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+See the acceptance-test table in the MVP specification for the tests required before each later delivery slice is complete.
+
+## Privacy and etiquette
+
+Runs locally and shares nothing. The fetcher honours `robots.txt`, identifies itself with an honest user agent, and never bypasses access controls or logs in anywhere — some sites (particularly ones behind aggressive bot-protection) will simply come back unreachable rather than being worked around. Any outreach is written and sent by you by hand; this tool never emails anyone, and no AI model ever drafts outreach text — reports surface evidence and suggestions, the appeal is yours to write.
