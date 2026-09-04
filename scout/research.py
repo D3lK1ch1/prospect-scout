@@ -104,6 +104,18 @@ _CHROME_TAGS = ("nav", "header", "footer", "script", "style", "noscript")
 # isn't losing real evidence, it's removing a screen-reader-only nav aid.
 _CHROME_CLASSES = ("skip-link",)
 
+# Some themes only wrap their *desktop* menu in a real <nav> element and build
+# a separate mobile off-canvas menu as a plain <div role="navigation">,
+# outside _CHROME_TAGS' reach entirely since that only matches tag names -
+# confirmed real leak: ideabox.com.au's site-wide nav ("Artificial
+# Intelligence Developers Australia", "IoT Solutions", ... "About") sat in
+# exactly this shape and matched a requested role term on every page,
+# producing an identical, uninformative excerpt for three different
+# case-study URLs. Same reasoning as _CHROME_CLASSES above - an ARIA landmark
+# role is a stronger, more general signal of "this is chrome, not content"
+# than guessing at every theme's own class-naming convention.
+_CHROME_ROLES = ("navigation",)
+
 
 def page_text(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
@@ -111,6 +123,9 @@ def page_text(html: str) -> str:
         tag.decompose()
     for class_name in _CHROME_CLASSES:
         for tag in soup.find_all(class_=class_name):
+            tag.decompose()
+    for role in _CHROME_ROLES:
+        for tag in soup.find_all(attrs={"role": role}):
             tag.decompose()
     return soup.get_text(" ", strip=True)
 
@@ -559,8 +574,6 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
     result.location_checked = request.location_required
     if request.location_required:
         result.location_verified = location_is_verified(home_text, request, homepage.final_url or domain)
-        if not result.location_verified:
-            result.limitations.append("Requested city/state/country was not verified on the fetched homepage.")
 
     # Our own guessed fallback paths (profile.fallback_paths) must never be
     # reported as "a broken link on this site" if they 404 - that's our
@@ -588,6 +601,13 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
                 ))
             continue
         text = page_text(page.html or "")
+        # A company's own location text can genuinely sit on a
+        # careers/case-study page instead of the homepage - this only checks
+        # pages already fetched for other reasons, no new network calls, and
+        # never loosens location_is_verified() itself, just applies the same
+        # literal city/state/country check to more of the real evidence.
+        if request.location_required and not result.location_verified and location_is_verified(text, request, homepage.final_url or domain):
+            result.location_verified = True
         roles = matching_roles(text, all_terms)
         if roles:
             is_job_page = _is_job_page(page.final_url or url)
@@ -609,9 +629,15 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
             page = fetch(url)
             if not page.ok:
                 continue
-            contact = contact_finding(page_text(page.html or ""), page.final_url or url, profile.contact_titles)
+            team_text = page_text(page.html or "")
+            if request.location_required and not result.location_verified and location_is_verified(team_text, request, homepage.final_url or domain):
+                result.location_verified = True
+            contact = contact_finding(team_text, page.final_url or url, profile.contact_titles)
             if contact:
                 break
+
+    if request.location_required and not result.location_verified:
+        result.limitations.append("Requested city/state/country was not verified on the fetched homepage or any scanned page.")
 
     if not result.findings:
         potential = hidden_need_finding(result, homepage.final_url or domain, home_text, profile, contact=contact)

@@ -37,6 +37,33 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(result.findings[0].kind, "advertised_role_signal")
         self.assertIn("Web Developer", result.findings[0].evidence)
 
+    def test_location_verified_from_an_evidence_page_when_homepage_lacks_it(self):
+        # Gap #13(b): a real office address can sit on a careers/case-study
+        # page instead of the homepage - the homepage alone shouldn't be able
+        # to sink an otherwise-eligible company to needs_review just because
+        # the location text happens to live one click away.
+        pages = {
+            "https://acme.test": fetched("https://acme.test", "<p>software platform</p><a href='/careers'>Careers</a>"),
+            "https://acme.test/careers": fetched("https://acme.test/careers", "<h1>Web Developer</h1><p>Melbourne VIC Australia. Maintain customer website features.</p>"),
+        }
+
+        result = analyse_company("https://acme.test", self.request, fetch=lambda url: pages.get(url, FetchResult(url, error="not found")))
+
+        self.assertEqual(result.status, "eligible")
+        self.assertTrue(result.location_verified)
+        self.assertEqual(result.limitations, [])
+
+    def test_location_still_unverified_and_limitation_shown_when_no_page_has_it(self):
+        pages = {
+            "https://acme.test": fetched("https://acme.test", "<p>software platform</p><a href='/careers'>Careers</a>"),
+            "https://acme.test/careers": fetched("https://acme.test/careers", "<h1>Web Developer</h1><p>Maintain customer website features.</p>"),
+        }
+
+        result = analyse_company("https://acme.test", self.request, fetch=lambda url: pages.get(url, FetchResult(url, error="not found")))
+
+        self.assertFalse(result.location_verified)
+        self.assertIn("Requested city/state/country was not verified on the fetched homepage or any scanned page.", result.limitations)
+
     def test_sector_idea_stays_low_confidence_and_needs_review(self):
         result = analyse_company(
             "https://charity.test",
@@ -250,6 +277,23 @@ class PageTextChromeStrippingTests(unittest.TestCase):
         text = page_text(html)
         self.assertIn("Real page content", text)
         self.assertNotIn("Skip to content", text)
+
+    def test_strips_div_based_nav_marked_only_by_aria_role(self):
+        # Regression for a confirmed real leak: ideabox.com.au's mobile
+        # off-canvas menu is a <div role="navigation">, not a <nav> element -
+        # the desktop menu is a real <nav> and was already stripped, but this
+        # div-based duplicate of the same site-wide links escaped the
+        # tag-name-only check above and matched a requested role term
+        # ("developer") on every page, producing an identical excerpt no
+        # matter which case-study URL was actually being scanned.
+        html = (
+            '<nav><ul><li>Home</li></ul></nav>'
+            '<div role="navigation"><ul><li>Mobile App Developers</li><li>About</li></ul></div>'
+            '<p>Real case study content about a client project.</p>'
+        )
+        text = page_text(html)
+        self.assertIn("Real case study content", text)
+        self.assertNotIn("Mobile App Developers", text)
 
 
 class TextExcerptTests(unittest.TestCase):
