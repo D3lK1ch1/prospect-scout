@@ -163,6 +163,7 @@ def discover_sitemap_pages(
     whole_word: bool = False,
     priority_keywords: tuple[str, ...] = (),
     boost_terms: tuple[str, ...] = (),
+    lastmods: dict[str, str | None] | None = None,
 ) -> list[str]:
     """Up to `limit` same-site URLs from base_url's sitemap(s) matching `keywords`,
     ranked so the most relevant ones survive the cutoff.
@@ -176,6 +177,13 @@ def discover_sitemap_pages(
     `priority_keywords` (a precise subset of `keywords`) and `boost_terms`
     (the requester's own typed roles/interests) only affect ranking among
     already-included matches, never which pages get included at all.
+
+    `lastmods`, when passed, is filled in-place with each matched URL's own
+    sitemap `<lastmod>` value (or None if the entry didn't declare one) - an
+    out-parameter rather than a second return value, so existing callers that
+    only want the URL list are unaffected. This is
+    the one place in the pipeline that already parses the sitemap XML, so
+    capturing <lastmod> here costs no extra requests.
     """
     sitemap_urls = find_sitemap_urls(base_url)
     if not sitemap_urls:
@@ -199,8 +207,9 @@ def discover_sitemap_pages(
                     if loc.text and loc.text.strip():
                         queue.append((loc.text.strip(), depth + 1))
             elif kind == "urlset":
-                for loc in _iter_local(root, "loc"):
-                    url = (loc.text or "").strip()
+                for url_el in _iter_local(root, "url"):
+                    loc_el = next(_iter_local(url_el, "loc"), None)
+                    url = (loc_el.text or "").strip() if loc_el is not None and loc_el.text else ""
                     if not url or url in seen:
                         continue
                     if not same_site(urlsplit(url).netloc, urlsplit(base_url).netloc):
@@ -209,6 +218,9 @@ def discover_sitemap_pages(
                     if _path_matches(path, keywords, whole_word):
                         seen.add(url)
                         matches.append(url)
+                        if lastmods is not None:
+                            lastmod_el = next(_iter_local(url_el, "lastmod"), None)
+                            lastmods[url] = lastmod_el.text.strip() if (lastmod_el is not None and lastmod_el.text) else None
 
     # Stable sort: Python's reverse=True still preserves original relative
     # order among equal scores, so untiered matches keep document order.

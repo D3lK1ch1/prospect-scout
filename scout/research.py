@@ -171,7 +171,7 @@ def _cross_subdomain_nav_links(base_url: str, html: str, priority_keywords: tupl
 _MAX_CROSS_SUBDOMAIN_HOSTS = 2
 
 
-def _cross_subdomain_sitemap_urls(cross_subdomain_links: list[str], keywords: tuple[str, ...], limit: int, whole_word: bool, priority_keywords: tuple[str, ...], boost_terms: tuple[str, ...] = ()) -> list[str]:
+def _cross_subdomain_sitemap_urls(cross_subdomain_links: list[str], keywords: tuple[str, ...], limit: int, whole_word: bool, priority_keywords: tuple[str, ...], boost_terms: tuple[str, ...] = (), lastmods: dict[str, str | None] | None = None) -> list[str]:
     seen_hosts: set[str] = set()
     matches: list[str] = []
     for url in cross_subdomain_links:
@@ -182,11 +182,11 @@ def _cross_subdomain_sitemap_urls(cross_subdomain_links: list[str], keywords: tu
         if host_base in seen_hosts:
             continue
         seen_hosts.add(host_base)
-        matches.extend(discover_sitemap_pages(host_base, keywords=keywords, limit=limit, whole_word=whole_word, priority_keywords=priority_keywords, boost_terms=boost_terms))
+        matches.extend(discover_sitemap_pages(host_base, keywords=keywords, limit=limit, whole_word=whole_word, priority_keywords=priority_keywords, boost_terms=boost_terms, lastmods=lastmods))
     return matches
 
 
-def evidence_urls(base_url: str, html: str, profile: ResearchProfile, boost_terms: tuple[str, ...] = ()) -> list[str]:
+def evidence_urls(base_url: str, html: str, profile: ResearchProfile, boost_terms: tuple[str, ...] = (), lastmods: dict[str, str | None] | None = None) -> list[str]:
     """Discover a bounded set of pages relevant to the selected profile.
 
     Tries sitemap-based discovery first (finds the right pages without
@@ -198,9 +198,9 @@ def evidence_urls(base_url: str, html: str, profile: ResearchProfile, boost_term
     `boost_terms` - the requester's own typed roles/interests - only affects
     which of the matched pages rank highest, never which ones are found.
     """
-    sitemap_urls = discover_sitemap_pages(base_url, priority_keywords=STRONG_PATH_KEYWORDS, boost_terms=boost_terms)
+    sitemap_urls = discover_sitemap_pages(base_url, priority_keywords=STRONG_PATH_KEYWORDS, boost_terms=boost_terms, lastmods=lastmods)
     cross_subdomain = _cross_subdomain_nav_links(base_url, html, STRONG_PATH_KEYWORDS)
-    cross_subdomain_sitemap = _cross_subdomain_sitemap_urls(cross_subdomain, SITEMAP_PATH_KEYWORDS, 5, False, STRONG_PATH_KEYWORDS, boost_terms)
+    cross_subdomain_sitemap = _cross_subdomain_sitemap_urls(cross_subdomain, SITEMAP_PATH_KEYWORDS, 5, False, STRONG_PATH_KEYWORDS, boost_terms, lastmods=lastmods)
     combined = list(dict.fromkeys((*cross_subdomain, *cross_subdomain_sitemap, *sitemap_urls)))  # the company's own direct link ranks first
     if combined:
         return combined[:5]
@@ -229,16 +229,16 @@ _TEAM_PAGE_KEYWORDS = ("team", "about", "leadership", "people", "who-we-are", "m
 _TEAM_PAGE_PATHS = ("/team", "/about", "/about-us", "/leadership", "/people")
 
 
-def team_page_urls(base_url: str, html: str) -> list[str]:
+def team_page_urls(base_url: str, html: str, lastmods: dict[str, str | None] | None = None) -> list[str]:
     """Up to 2 candidate team/about/leadership page URLs: sitemap plus any
     direct cross-subdomain nav link and that subdomain's own sitemap (same
     combined approach as evidence_urls() - see _cross_subdomain_nav_links /
     _cross_subdomain_sitemap_urls), homepage-link scan as fallback. Bounded
     to 2 - this only needs one real hit, not exhaustive coverage.
     """
-    sitemap_urls = discover_sitemap_pages(base_url, keywords=_TEAM_PAGE_KEYWORDS, limit=2, whole_word=True, priority_keywords=_TEAM_PAGE_KEYWORDS)
+    sitemap_urls = discover_sitemap_pages(base_url, keywords=_TEAM_PAGE_KEYWORDS, limit=2, whole_word=True, priority_keywords=_TEAM_PAGE_KEYWORDS, lastmods=lastmods)
     cross_subdomain = _cross_subdomain_nav_links(base_url, html, _TEAM_PAGE_KEYWORDS)
-    cross_subdomain_sitemap = _cross_subdomain_sitemap_urls(cross_subdomain, _TEAM_PAGE_KEYWORDS, 2, True, _TEAM_PAGE_KEYWORDS)
+    cross_subdomain_sitemap = _cross_subdomain_sitemap_urls(cross_subdomain, _TEAM_PAGE_KEYWORDS, 2, True, _TEAM_PAGE_KEYWORDS, lastmods=lastmods)
     combined = list(dict.fromkeys((*cross_subdomain, *cross_subdomain_sitemap, *sitemap_urls)))
     if combined:
         return combined[:2]
@@ -582,9 +582,15 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
     # homepage (i.e. not an exact match to one of our guesses) counts.
     guessed_paths = {urljoin(homepage.final_url or domain, path) for path in profile.fallback_paths}
     broken_links: list[Finding] = []
+    # Filled in by evidence_urls()/team_page_urls() below from each matched
+    # URL's own sitemap <lastmod> . Absent for any
+    # URL that didn't come from a sitemap entry (homepage-link-scan fallback,
+    # guessed profile paths), which is a normal, honest "no date declared",
+    # not an error.
+    lastmods: dict[str, str | None] = {}
 
     all_terms = tuple(dict.fromkeys((*profile.role_terms, *request.roles)))
-    for url in evidence_urls(homepage.final_url or domain, homepage.html or "", profile, boost_terms=all_terms):
+    for url in evidence_urls(homepage.final_url or domain, homepage.html or "", profile, boost_terms=all_terms, lastmods=lastmods):
         page = fetch(url)
         if not page.ok:
             # A response with a successful status that merely isn't HTML
@@ -618,6 +624,7 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
                 confidence="high" if any(role.lower() in text.lower() for role in request.roles) else "medium",
                 suggestion=("Review the role scope and propose a narrowly scoped way to reduce the stated workload or delivery risk."
                             if is_job_page else "Use this work example to ask how the capability is delivered and maintained; do not assume an open role."),
+                observed_at=lastmods.get(url),
             ))
 
     # Discovered before the hidden-need decision below (not just appended
@@ -625,7 +632,7 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
     # whether a real technical contact was already found here.
     contact = None
     if profile.contact_titles:
-        for url in team_page_urls(homepage.final_url or domain, homepage.html or ""):
+        for url in team_page_urls(homepage.final_url or domain, homepage.html or "", lastmods=lastmods):
             page = fetch(url)
             if not page.ok:
                 continue
@@ -634,6 +641,7 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
                 result.location_verified = True
             contact = contact_finding(team_text, page.final_url or url, profile.contact_titles)
             if contact:
+                contact.observed_at = lastmods.get(url)
                 break
 
     if request.location_required and not result.location_verified:

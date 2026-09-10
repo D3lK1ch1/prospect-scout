@@ -54,6 +54,18 @@ def urlset(*page_urls):
     return f'<?xml version="1.0"?><urlset {SITEMAP_NS}>{entries}</urlset>'
 
 
+def urlset_with_lastmod(*url_lastmod_pairs):
+    """Like urlset(), but each entry is a (url, lastmod_or_none) pair - lets
+    a fixture mix dated and undated entries, matching real sitemaps where
+    <lastmod> is optional per-URL, not all-or-nothing for the whole file.
+    """
+    entries = "".join(
+        f"<url><loc>{url}</loc>{f'<lastmod>{lastmod}</lastmod>' if lastmod else ''}</url>"
+        for url, lastmod in url_lastmod_pairs
+    )
+    return f'<?xml version="1.0"?><urlset {SITEMAP_NS}>{entries}</urlset>'
+
+
 class FindSitemapUrlsTests(unittest.TestCase):
     @patch("scout.sitemap.httpx.Client")
     def test_declared_sitemap_from_robots_txt_is_used(self, client_factory):
@@ -149,6 +161,48 @@ class DiscoverSitemapPagesTests(unittest.TestCase):
         self.assertEqual(result, [])
         self.assertIn("https://nositemap.test/sitemap.xml", client.calls)
         self.assertIn("https://nositemap.test/sitemap_index.xml", client.calls)
+
+    @patch("scout.sitemap.httpx.Client")
+    def test_lastmods_out_param_captures_declared_dates(self, client_factory):
+        client_factory.return_value = StubClient({
+            "https://dated.test/robots.txt": xml_response(
+                "https://dated.test/robots.txt", robots_with_sitemap("https://dated.test/sitemap.xml")
+            ),
+            "https://dated.test/sitemap.xml": xml_response(
+                "https://dated.test/sitemap.xml",
+                urlset_with_lastmod(
+                    ("https://dated.test/careers", "2026-08-01"),
+                    ("https://dated.test/our-work/project-a", None),
+                ),
+            ),
+        })
+        lastmods: dict = {}
+
+        result = discover_sitemap_pages("https://dated.test", lastmods=lastmods)
+
+        self.assertEqual(set(result), {"https://dated.test/careers", "https://dated.test/our-work/project-a"})
+        self.assertEqual(lastmods["https://dated.test/careers"], "2026-08-01")
+        self.assertIsNone(lastmods["https://dated.test/our-work/project-a"])
+
+    @patch("scout.sitemap.httpx.Client")
+    def test_lastmods_param_omitted_behaves_exactly_as_before(self, client_factory):
+        """A dated sitemap, called the old way (no lastmods=), must match the
+        exact same URLs as an undated one - the out-param must never change
+        which pages are discovered, only add an optional side channel.
+        """
+        client_factory.return_value = StubClient({
+            "https://dated.test/robots.txt": xml_response(
+                "https://dated.test/robots.txt", robots_with_sitemap("https://dated.test/sitemap.xml")
+            ),
+            "https://dated.test/sitemap.xml": xml_response(
+                "https://dated.test/sitemap.xml",
+                urlset_with_lastmod(("https://dated.test/careers", "2026-08-01")),
+            ),
+        })
+
+        result = discover_sitemap_pages("https://dated.test")
+
+        self.assertEqual(result, ["https://dated.test/careers"])
 
     @patch("scout.sitemap.httpx.Client")
     def test_sitemapindex_recursion_is_bounded(self, client_factory):

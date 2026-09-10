@@ -38,7 +38,7 @@ class ResearchTests(unittest.TestCase):
         self.assertIn("Web Developer", result.findings[0].evidence)
 
     def test_location_verified_from_an_evidence_page_when_homepage_lacks_it(self):
-        # Gap #13(b): a real office address can sit on a careers/case-study
+        # A real office address can sit on a careers/case-study
         # page instead of the homepage - the homepage alone shouldn't be able
         # to sink an otherwise-eligible company to needs_review just because
         # the location text happens to live one click away.
@@ -810,3 +810,46 @@ class HiddenNeedFindingIntegrationTests(unittest.TestCase):
 
         need = next(f for f in result.findings if f.kind == "potential_role_related_need")
         self.assertIn("No evidence of a dedicated technical or leadership role", need.suggestion)
+
+
+class AnalyseCompanyRecencyTests(unittest.TestCase):
+    """A finding's observed_at should come from
+    its own source URL's sitemap <lastmod>, when it was discovered that way.
+    """
+
+    def setUp(self):
+        self.request = ResearchRequest("Melbourne", "VIC", "Australia", ("web developer",))
+
+    @patch("scout.research.discover_sitemap_pages")
+    def test_finding_observed_at_comes_from_sitemap_lastmod(self, discover):
+        def fake_discover(base_url, keywords=None, limit=5, whole_word=False, priority_keywords=(), boost_terms=(), lastmods=None):
+            if lastmods is not None:
+                lastmods["https://acme.test/careers"] = "2026-08-01"
+            return ["https://acme.test/careers"]
+
+        discover.side_effect = fake_discover
+        pages = {
+            "https://acme.test": fetched("https://acme.test", "<p>Melbourne VIC Australia</p>"),
+            "https://acme.test/careers": fetched("https://acme.test/careers", "<h1>Web Developer</h1><p>Maintain customer website features.</p>"),
+        }
+
+        result = analyse_company("https://acme.test", self.request, fetch=lambda url: pages.get(url, FetchResult(url, error="not found")))
+
+        self.assertEqual(result.findings[0].kind, "advertised_role_signal")
+        self.assertEqual(result.findings[0].observed_at, "2026-08-01")
+
+    @patch("scout.research.discover_sitemap_pages", return_value=[])
+    def test_finding_observed_at_is_none_when_not_sitemap_discovered(self, _discover):
+        # Falls back to the homepage-link-scan path (no sitemap entry, so no
+        # <lastmod> exists for this URL at all) - observed_at must stay None,
+        # not a fabricated fetch-time stamp (deliberately ruled out in
+        # docs/KNOWN_GAPS.md #8: "when we happened to fetch it" isn't
+        # "how old the signal is").
+        pages = {
+            "https://acme.test": fetched("https://acme.test", "<p>Melbourne VIC Australia</p><a href='/careers'>Careers</a>"),
+            "https://acme.test/careers": fetched("https://acme.test/careers", "<h1>Web Developer</h1><p>Maintain customer website features.</p>"),
+        }
+
+        result = analyse_company("https://acme.test", self.request, fetch=lambda url: pages.get(url, FetchResult(url, error="not found")))
+
+        self.assertIsNone(result.findings[0].observed_at)

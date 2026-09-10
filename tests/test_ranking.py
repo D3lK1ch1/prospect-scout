@@ -8,8 +8,8 @@ def company(name, status="needs_review", location_verified=False, location_check
     return CompanyResult(domain=f"https://{name}", name=name, status=status, location_verified=location_verified, location_checked=location_checked, findings=findings or [])
 
 
-def finding(confidence: str) -> Finding:
-    return Finding(kind="advertised_role_signal", evidence="ev", source_url="https://x.test", confidence=confidence, suggestion="sugg")
+def finding(confidence: str, observed_at: str | None = None) -> Finding:
+    return Finding(kind="advertised_role_signal", evidence="ev", source_url="https://x.test", confidence=confidence, suggestion="sugg", observed_at=observed_at)
 
 
 class RankCompaniesTests(unittest.TestCase):
@@ -45,6 +45,30 @@ class RankCompaniesTests(unittest.TestCase):
 
         self.assertEqual([c.name for c in ranked], ["first", "second"])
 
+    def test_more_recent_dated_evidence_ranks_higher_when_otherwise_tied(self):
+        older = company("older", status="eligible", location_verified=True, findings=[finding("high", observed_at="2025-01-01")])
+        newer = company("newer", status="eligible", location_verified=True, findings=[finding("high", observed_at="2026-08-01")])
+
+        ranked = rank_companies([older, newer])
+
+        self.assertEqual([c.name for c in ranked], ["newer", "older"])
+
+    def test_no_dated_evidence_does_not_crash_and_ranks_below_a_dated_one(self):
+        undated = company("undated", status="eligible", location_verified=True, findings=[finding("high")])
+        dated = company("dated", status="eligible", location_verified=True, findings=[finding("high", observed_at="2026-08-01")])
+
+        ranked = rank_companies([undated, dated])
+
+        self.assertEqual([c.name for c in ranked], ["dated", "undated"])
+
+    def test_unparseable_observed_at_does_not_crash_and_falls_back_to_no_date(self):
+        garbage = company("garbage", status="eligible", location_verified=True, findings=[finding("high", observed_at="not-a-date")])
+        dated = company("dated", status="eligible", location_verified=True, findings=[finding("high", observed_at="2026-08-01")])
+
+        ranked = rank_companies([garbage, dated])
+
+        self.assertEqual([c.name for c in ranked], ["dated", "garbage"])
+
 
 class RankReasonTests(unittest.TestCase):
     def test_mentions_location_verification(self):
@@ -65,6 +89,16 @@ class RankReasonTests(unittest.TestCase):
 
         self.assertIn("location check skipped", reason)
         self.assertNotIn("location not verified", reason)
+
+    def test_mentions_most_recent_dated_evidence_when_present(self):
+        reason = rank_reason(company("acme", findings=[finding("high", observed_at="2025-01-01"), finding("high", observed_at="2026-08-01")]))
+
+        self.assertIn("most recent dated evidence: 2026-08-01", reason)
+
+    def test_omits_recency_mention_when_no_dated_evidence(self):
+        reason = rank_reason(company("acme", findings=[finding("high")]))
+
+        self.assertNotIn("most recent dated evidence", reason)
 
 
 class RankKeyLocationSkipTests(unittest.TestCase):

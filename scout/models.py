@@ -32,6 +32,10 @@ class Finding:
     source_url: str
     confidence: str
     suggestion: str
+    # ISO-8601 string, when a fetched source declares its own last-modified
+    # date (e.g. a sitemap <lastmod>); None when no such date was found.
+    # Not yet populated by the research pipeline
+    observed_at: str | None = None
 
 
 @dataclass
@@ -45,6 +49,11 @@ class CompanyResult:
     # (specific-company mode) - lets ranking/reporting/webapp say "skipped"
     # instead of misreporting an unattempted check as a failed one.
     location_checked: bool = True
+    # Nullable: only populated when a coordinate source actually found this
+    # company (OSM discovery, or schema.org structured data on its own site).
+    # None means "no coordinate available", not "at 0,0".
+    lat: float | None = None
+    lon: float | None = None
     findings: list[Finding] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
 
