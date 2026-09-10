@@ -3,6 +3,42 @@
 Notable changes to this project. Dated, not version-numbered — nothing's
 been tagged or released yet.
 
+## 2026-09-11 — Local persistence layer; dated-signal recency ranking 
+
+First two units of the map/persistence feature
+
+### Added
+
+- `scout/store.py` — local SQLite persistence (`reports/prospect_scout.db`
+  by default): `save_report()`/`load_companies()`. Re-saving an already-known
+  domain replaces its row and findings wholesale rather than appending a
+  duplicate, so a rerun always reflects each domain's latest research, never
+  a growing pile of stale entries. Not yet wired into `run_research()` or
+  the webapp — this unit only covers the storage layer itself.
+  `tests/test_store.py` (new).
+- `scout/models.py` — `CompanyResult` gained nullable `lat`/`lon`;
+  `Finding` gained nullable `observed_at` (ISO-8601, from a source page's
+  own sitemap `<lastmod>` when it was discovered that way).
+- `scout/sitemap.py:discover_sitemap_pages()` — new optional `lastmods`
+  out-parameter, filled in-place with each matched URL's own `<lastmod>`
+  value (or `None`). Existing callers that don't pass it are unaffected -
+  same return type, same matched URLs.
+- `scout/research.py` — `evidence_urls()`/`team_page_urls()` now thread a
+  `lastmods` dict through to every `discover_sitemap_pages()` call and
+  attach the result to each `Finding.observed_at` it builds from a
+  sitemap-discovered page. A page reached via homepage-link-scan or a
+  guessed fallback path (no sitemap entry) correctly gets `observed_at=None`
+  - an honest "no date declared", not a fabricated fetch-time stamp.
+- `scout/ranking.py` — `rank_key()` gained dated-signal recency as its
+  fourth component (per `docs/MVP_SPEC.md`'s ranking section), only ever
+  breaking ties among companies already equal on status/location/evidence
+  strength. A company with no dated evidence never outranks one with a
+  genuinely fresher date, and never crashes on a missing or unparseable
+  `observed_at` - both fall back to the same floor. `rank_reason()` now
+  names the freshest dated evidence when one exists.
+
+168/168 tests pass.
+
 ## 2026-09-04 — Two confirmed evidence-extraction bugs fixed
 
 ### Fixed
