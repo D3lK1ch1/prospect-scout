@@ -30,7 +30,10 @@ from scout.reporting import write_report
 from scout.research import analyse_company, run_research
 
 Fetch = Callable[[str], FetchResult]
-Discover = Callable[[str, str, str, str | None], list[str]]
+# Real signature also accepts a `coordinates` keyword (an out-parameter -
+# see scout/osm_discovery.py:discover_domains); left out of this Callable
+# alias since typing.Callable can't express an optional kwarg precisely.
+Discover = Callable[..., list[str]]
 
 # OSM discovery can return well over this many candidates in a dense city;
 # researching all of them still fetches each company's own site sequentially,
@@ -169,14 +172,15 @@ def run_research_form(
     except ValueError as exc:
         return render_form(error=str(exc))
 
-    domains = discover(city, state, country, profile.id)
+    coordinates: dict[str, tuple[float, float]] = {}
+    domains = discover(city, state, country, profile.id, coordinates=coordinates)
     if not domains:
         return render_form(error="No businesses with a public website were found near that location via OpenStreetMap. Try a nearby larger town, or double-check the spelling.")
 
     if len(domains) > limit:
         domains = domains[:limit]
 
-    report = run_research(request, domains, fetch=fetch, profile=profile, max_workers=max_workers)
+    report = run_research(request, domains, fetch=fetch, profile=profile, max_workers=max_workers, coordinates=coordinates)
     report.companies = rank_companies(report.companies)
     markdown_path, json_path = write_report(report, output)
     return render_results(report.companies, markdown_path, json_path)

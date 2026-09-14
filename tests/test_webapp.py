@@ -38,7 +38,7 @@ class WebappFormTests(unittest.TestCase):
             ),
         }
         fake_fetch = lambda url: pages.get(url, FetchResult(url, error="not found"))
-        fake_discover = lambda city, state, country, profile_id: ["https://acme.test"]
+        fake_discover = lambda city, state, country, profile_id, coordinates=None: ["https://acme.test"]
 
         with tempfile.TemporaryDirectory() as directory:
             output_path = Path(directory) / "report.md"
@@ -65,7 +65,7 @@ class WebappFormTests(unittest.TestCase):
             country="Nowhereland",
             profile_id="technology",
             roles_input="",
-            discover=lambda city, state, country, profile_id: [],
+            discover=lambda city, state, country, profile_id, coordinates=None: [],
         )
 
         self.assertIn("Prospect Scout research setup", html)
@@ -89,7 +89,7 @@ class WebappFormTests(unittest.TestCase):
                 profile_id="technology",
                 roles_input="",
                 fetch=fake_fetch,
-                discover=lambda city, state, country, profile_id: discovered,
+                discover=lambda city, state, country, profile_id, coordinates=None: discovered,
                 limit=2,
                 output=str(output_path),
             )
@@ -110,7 +110,7 @@ class WebappFormTests(unittest.TestCase):
         fake_fetch = lambda url: pages.get(url, FetchResult(url, error="not found"))
         # Discovery order deliberately puts the weaker candidate first, so a
         # pass only means ranking actually reordered them.
-        fake_discover = lambda city, state, country, profile_id: ["https://weak.test", "https://strong.test"]
+        fake_discover = lambda city, state, country, profile_id, coordinates=None: ["https://weak.test", "https://strong.test"]
 
         with tempfile.TemporaryDirectory() as directory:
             output_path = Path(directory) / "report.md"
@@ -142,7 +142,7 @@ class WebappFormTests(unittest.TestCase):
             ),
         }
         fake_fetch = lambda url: pages.get(url, FetchResult(url, error="not found"))
-        fake_discover = lambda city, state, country, profile_id: ["https://acme.test"]
+        fake_discover = lambda city, state, country, profile_id, coordinates=None: ["https://acme.test"]
 
         with tempfile.TemporaryDirectory() as directory:
             output_path = Path(directory) / "report.md"
@@ -171,7 +171,7 @@ class WebappFormTests(unittest.TestCase):
             country="Australia",
             profile_id="<script>alert(1)</script>",
             roles_input="",
-            discover=lambda city, state, country, profile_id: ["https://acme.test"],
+            discover=lambda city, state, country, profile_id, coordinates=None: ["https://acme.test"],
         )
 
         self.assertNotIn("<script>alert(1)</script>", html_out)
@@ -184,7 +184,7 @@ class WebappFormTests(unittest.TestCase):
             country="Australia",
             profile_id="not-a-real-profile",
             roles_input="",
-            discover=lambda city, state, country, profile_id: ["https://acme.test"],
+            discover=lambda city, state, country, profile_id, coordinates=None: ["https://acme.test"],
         )
 
         self.assertIn("Prospect Scout research setup", html)
