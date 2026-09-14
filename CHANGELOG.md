@@ -3,6 +3,37 @@
 Notable changes to this project. Dated, not version-numbered — nothing's
 been tagged or released yet.
 
+## 2026-09-14 — Structured-data coordinates for /inspect mode (fifth and final map/persistence unit)
+
+Closes the last gap from the map/persistence plan: `/inspect` (specific-
+company) mode skips OSM discovery entirely, so it never had a coordinate
+source at all - every company researched that way was permanently
+unmapped. Live-verified during the design session (2026-09-10) that a
+company's own schema.org structured data is a real, free, zero-extra-
+request source for this - confirmed present on `invotec.com.au`, confirmed
+absent on `ssw.com.au`/`commgen.com.au`/`corporate2contract.com`, so this
+was built expecting a real but partial hit rate, not a guaranteed fix.
+
+### Added
+
+- `scout/research.py:extract_structured_coordinates()` — parses any
+  `<script type="application/ld+json">` block already present in the
+  (already-fetched) homepage HTML for a `"geo": {"latitude": ...,
+  "longitude": ...}` object. Malformed JSON, missing fields, non-numeric
+  values, and pages with no structured data all return `None` - never
+  raises, never guesses. Deliberately does **not** fall back to a
+  fuzzy name-based geocode when this misses, per this session's own
+  conclusion: "if no coordinates are found, then I concede the limits and
+  ceilings."
+- `scout/research.py:analyse_company()` now calls it and sets
+  `CompanyResult.lat`/`.lon` when found. This is a floor, not the final
+  word: `run_research()`'s existing OSM-coordinate application still
+  overrides it when a coordinate came from the actual location search -
+  structured data only ends up mattering for paths (chiefly `/inspect`)
+  that never had an OSM coordinate to begin with.
+
+191/191 tests pass.
+
 ## 2026-09-14 — Fixed: no way to reach the map from the results page
 
 Found via real use, same day the map shipped: `render_results()` (the page

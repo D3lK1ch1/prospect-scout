@@ -10,6 +10,8 @@ A private, locally run research aid for finding evidence-backed company prospect
 
 All three paths share the same scanning logic: career-page role matching, sector-aware cautious hidden-need ideas where no matching role is found, and a deterministic check for leftover editorial artifacts in a homepage's `<title>` tag (e.g. `"(Copy)"`, `"Untitled"`). All three write local Markdown/JSON reports.
 
+**Web-app searches also persist locally, and can be viewed on a map.** Every widespread or specific-company search run through the web app is saved to a local SQLite store (`reports/prospect_scout.db`) — rerunning a search replaces a domain's prior entry rather than piling up duplicates, so the store always reflects your latest research, not just your latest run. A **map view** (`/map`, linked from every web-app page) plots every persisted company that has a known coordinate on an OpenStreetMap-tiled map, and lists the rest underneath rather than dropping them. Coordinates come from OpenStreetMap during widespread-search discovery, or from a company's own schema.org structured data when using specific-company mode — not always present on the company's own page, a genuine and expected gap rather than a bug. The command-line path doesn't persist to this store or get coordinates at all; the map only ever reflects web-app research.
+
 **Known limitation, worth reading before relying on the web app's widespread search:** OpenStreetMap doesn't have every company mapped — it's confirmed to miss real, currently-hiring businesses, including some large ones. It's a genuinely useful *widening* of what you'd find by hand, not a guarantee of completeness. A second discovery adapter (Australian Business Register data) is in design to help close that gap.
 
 The narrowed product boundary, evidence rules, delivery slices, and acceptance criteria are in [docs/MVP_SPEC.md](docs/MVP_SPEC.md).
@@ -33,13 +35,17 @@ pip install -r requirements.txt
 uvicorn scout.webapp:app --reload
 ```
 
-Then open `http://127.0.0.1:8000/` in a browser. Fill in city, state, country, and optional role terms, and submit — the technology profile is applied automatically. It geocodes the location, finds nearby candidates, researches up to 250 of them, and shows a results page ranked highest-priority first (eligible before needs-review, location-verified, evidence strength — see "Why ranked here" on each company), with every finding's evidence, source link, confidence, and suggestion shown inline — plus a link to the saved Markdown/JSON report if you want the raw file. Each company involves several polite, sequential fetches to that company's own site; companies are researched several at a time (not one after another) to keep a wide run's total time reasonable.
+Then open `http://127.0.0.1:8000/` in a browser. Fill in city, state, country, and optional role terms, and submit — the technology profile is applied automatically. It geocodes the location, finds nearby candidates, researches up to 250 of them, and shows a results page ranked highest-priority first (eligible before needs-review, location-verified, evidence strength, dated-signal recency — see "Why ranked here" on each company), with every finding's evidence, source link, confidence, and suggestion shown inline — plus a link to the saved Markdown/JSON report if you want the raw file, and a link to view the same companies on the map. Each company involves several polite, sequential fetches to that company's own site; companies are researched several at a time (not one after another) to keep a wide run's total time reasonable.
 
 If no businesses turn up for a location, you'll get a plain message back, not an error — that's an honest "nothing found," not a crash.
 
 ### Web app (already know the company — skip discovery)
 
-From the same running server, UI has specific company search instead of the widespread company search. Enter the company's URL and optional role terms; it skips OpenStreetMap discovery and the location check entirely and scans that one company's own site directly with same career/team/case-study page discovery and the same finding types as the widespread search above, just aimed at a company you already picked.
+From the same running server, UI has specific company search instead of the widespread company search. Enter the company's URL and optional role terms; it skips OpenStreetMap discovery and the location check entirely and scans that one company's own site directly with same career/team/case-study page discovery and the same finding types as the widespread search above, just aimed at a company you already picked. Since there's no location search here to supply a coordinate, this mode instead checks the company's own homepage for schema.org structured data (a common local-SEO pattern on WordPress-built sites, among others) and uses that for the map if present — otherwise the company still shows up in results and in the map's unplotted list, just without a pin.
+
+### Map view
+
+Open `/map` from any web-app page's nav to see every company persisted so far — not just the last run — plotted on an OpenStreetMap-tiled map (no API key needed). Companies with no known coordinate are listed underneath instead of being silently left out. Rerunning a search updates that company's entry on the map rather than adding a second pin for it.
 
 ### Command line
 
@@ -93,3 +99,5 @@ See the acceptance-test table in the MVP specification for the tests required be
 ## Privacy and etiquette
 
 Runs locally and shares nothing. The fetcher honours `robots.txt`, identifies itself with an honest user agent, and never bypasses access controls or logs in anywhere — some sites (particularly ones behind aggressive bot-protection) will simply come back unreachable rather than being worked around. Any outreach is written and sent by you by hand; this tool never emails anyone, and no AI model ever drafts outreach text — reports surface evidence and suggestions, the appeal is yours to write.
+
+Web-app research now persists between runs in a local SQLite file (`reports/prospect_scout.db`, gitignored) rather than being thrown away after each run's report is written — delete that file yourself if you want to clear accumulated results; nothing in this project does so automatically.

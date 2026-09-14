@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -488,6 +489,46 @@ def extract_title(html: str) -> str:
     return soup.title.get_text(strip=True) if soup.title else ""
 
 
+def extract_structured_coordinates(html: str) -> tuple[float, float] | None:
+    """A company's own schema.org structured data (a <script
+    type="application/ld+json"> block), when present, is the cheapest and
+    most reliable coordinate source: no extra request (this is the
+    already-fetched homepage HTML), no third-party geocoder, and it's the
+    company's own declared claim about itself.
+
+    Confirmed real shape (invotec.com.au, live-checked 2026-09-10): a
+    LocalBusiness entry with "geo": {"@type": "GeoCoordinates", "latitude":
+    ..., "longitude": ...}. Confirmed absent on several other real sites
+    (ssw.com.au, commgen.com.au, corporate2contract.com) in the same check -
+    that's an honest, expected miss (this data is common on WordPress/
+    Yoast-style local-SEO setups, not universal), not a bug. Deliberately
+    does not fall back to a fuzzy name-based geocode when this returns None -
+    see the map/persistence session notes.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    for script in soup.find_all("script", type="application/ld+json"):
+        if not script.string:
+            continue
+        try:
+            data = json.loads(script.string)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for entry in data if isinstance(data, list) else [data]:
+            if not isinstance(entry, dict):
+                continue
+            geo = entry.get("geo")
+            if not isinstance(geo, dict):
+                continue
+            lat, lon = geo.get("latitude"), geo.get("longitude")
+            if lat is None or lon is None:
+                continue
+            try:
+                return float(lat), float(lon)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 TITLE_ARTIFACT_PATTERNS = ("(copy)", "(draft)")
 
 
@@ -571,6 +612,14 @@ def analyse_company(domain: str, request: ResearchRequest, fetch: Fetch = fetch_
 
     home_text = page_text(homepage.html or "")
     result.sector = infer_sector(home_text)
+    # A floor, not the final word: run_research() applies an OSM-discovered
+    # coordinate (tied to the actual location search) over this when one
+    # exists, so this only ends up mattering for paths that never had an
+    # OSM coordinate to begin with - chiefly /inspect (specific-company)
+    # mode, which is the gap this was actually built to close.
+    structured_coords = extract_structured_coordinates(homepage.html or "")
+    if structured_coords is not None:
+        result.lat, result.lon = structured_coords
     result.location_checked = request.location_required
     if request.location_required:
         result.location_verified = location_is_verified(home_text, request, homepage.final_url or domain)

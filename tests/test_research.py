@@ -7,7 +7,7 @@ from unittest.mock import patch
 from scout.fetcher import FetchResult
 from scout.models import CompanyResult, Finding, ResearchRequest
 from scout.reporting import write_report
-from scout.research import _is_job_page, _looks_like_msp, _nearest_name, analyse_company, contact_finding, detect_platform_signal, evidence_urls, hidden_need_finding, infer_sector, location_is_verified, matching_roles, normalise_domain, page_text, read_domains, team_page_urls, text_excerpt, title_artifact_finding
+from scout.research import _is_job_page, _looks_like_msp, _nearest_name, analyse_company, contact_finding, detect_platform_signal, evidence_urls, extract_structured_coordinates, hidden_need_finding, infer_sector, location_is_verified, matching_roles, normalise_domain, page_text, read_domains, team_page_urls, text_excerpt, title_artifact_finding
 from scout.profiles import custom_profile, load_profiles
 
 
@@ -347,6 +347,57 @@ class TextExcerptTests(unittest.TestCase):
         text = "prefixCTOsuffix and other text here padding it out further."
         excerpt = text_excerpt(text, "CTO")
         self.assertIn("prefixCTOsuffix", excerpt)
+
+
+def _ld_json_page(entry: dict) -> str:
+    return f'<html><head><script type="application/ld+json">{json.dumps(entry)}</script></head><body></body></html>'
+
+
+class ExtractStructuredCoordinatesTests(unittest.TestCase):
+    def test_confirmed_real_shape_extracts_lat_lon(self):
+        # Trimmed from invotec.com.au's real homepage, live-checked 2026-09-10.
+        html = _ld_json_page({
+            "@type": "LocalBusiness",
+            "geo": {"@type": "GeoCoordinates", "latitude": "-37.95017022738708", "longitude": "145.05976439154927"},
+            "address": {"@type": "PostalAddress", "streetAddress": "Unit 9/148 Chesterville Rd"},
+        })
+
+        self.assertEqual(extract_structured_coordinates(html), (-37.95017022738708, 145.05976439154927))
+
+    def test_no_ld_json_script_at_all_returns_none(self):
+        self.assertIsNone(extract_structured_coordinates("<html><body><p>No structured data here.</p></body></html>"))
+
+    def test_ld_json_present_but_no_geo_field_returns_none(self):
+        html = _ld_json_page({"@type": "Organization", "name": "Acme"})
+
+        self.assertIsNone(extract_structured_coordinates(html))
+
+    def test_malformed_json_does_not_crash(self):
+        html = '<html><head><script type="application/ld+json">{not valid json</script></head></html>'
+
+        self.assertIsNone(extract_structured_coordinates(html))
+
+    def test_geo_present_but_missing_latitude_returns_none(self):
+        html = _ld_json_page({"geo": {"@type": "GeoCoordinates", "longitude": "145.0"}})
+
+        self.assertIsNone(extract_structured_coordinates(html))
+
+    def test_non_numeric_coordinate_does_not_crash(self):
+        html = _ld_json_page({"geo": {"latitude": "not-a-number", "longitude": "145.0"}})
+
+        self.assertIsNone(extract_structured_coordinates(html))
+
+    def test_ld_json_as_a_list_of_entries_is_checked(self):
+        html = (
+            '<html><head>'
+            '<script type="application/ld+json">' + json.dumps([
+                {"@type": "WebSite"},
+                {"@type": "LocalBusiness", "geo": {"latitude": "-37.8", "longitude": "144.9"}},
+            ]) + '</script>'
+            '</head></html>'
+        )
+
+        self.assertEqual(extract_structured_coordinates(html), (-37.8, 144.9))
 
 
 class TitleArtifactFindingTests(unittest.TestCase):
@@ -869,3 +920,60 @@ class AnalyseCompanyRecencyTests(unittest.TestCase):
         result = analyse_company("https://acme.test", self.request, fetch=lambda url: pages.get(url, FetchResult(url, error="not found")))
 
         self.assertIsNone(result.findings[0].observed_at)
+
+
+class AnalyseCompanyStructuredCoordinatesTests(unittest.TestCase):
+    """See the map/persistence session: a company's own schema.org
+    structured data is the coordinate source for paths with no OSM
+    discovery (chiefly /inspect mode - scout/webapp.py:run_inspect_form).
+    """
+
+    def setUp(self):
+        self.request = ResearchRequest("", "", "", ("web developer",), location_required=False)
+
+    @patch("scout.research.discover_sitemap_pages", return_value=[])
+    def test_lat_lon_set_from_homepage_structured_data(self, _discover):
+        html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@type": "LocalBusiness", "geo": {"latitude": "-37.95", "longitude": "145.06"}}'
+            '</script></head><body></body></html>'
+        )
+        pages = {"https://known.test": fetched("https://known.test", html)}
+
+        result = analyse_company("https://known.test", self.request, fetch=lambda url: pages.get(url, FetchResult(url, error="not found")))
+
+        self.assertEqual(result.lat, -37.95)
+        self.assertEqual(result.lon, 145.06)
+
+    @patch("scout.research.discover_sitemap_pages", return_value=[])
+    def test_lat_lon_stay_none_when_no_structured_data_present(self, _discover):
+        pages = {"https://known.test": fetched("https://known.test", "<p>No structured data on this page.</p>")}
+
+        result = analyse_company("https://known.test", self.request, fetch=lambda url: pages.get(url, FetchResult(url, error="not found")))
+
+        self.assertIsNone(result.lat)
+        self.assertIsNone(result.lon)
+
+    @patch("scout.research.discover_sitemap_pages", return_value=[])
+    def test_run_research_coordinates_dict_still_overrides_structured_data(self, _discover):
+        # An OSM-discovered coordinate (tied to the actual location search)
+        # wins over a company's own structured-data claim when both exist -
+        # see run_research()'s coordinate application in scout/research.py.
+        from scout.research import run_research
+
+        html = (
+            '<html><head><script type="application/ld+json">'
+            '{"geo": {"latitude": "-37.95", "longitude": "145.06"}}'
+            '</script></head><body></body></html>'
+        )
+        pages = {"https://known.test": fetched("https://known.test", html)}
+        request = ResearchRequest("Melbourne", "VIC", "Australia", ("web developer",))
+
+        report = run_research(
+            request, ["https://known.test"],
+            fetch=lambda url: pages.get(url, FetchResult(url, error="not found")),
+            coordinates={"https://known.test": (-37.81, 144.96)},
+        )
+
+        self.assertEqual(report.companies[0].lat, -37.81)
+        self.assertEqual(report.companies[0].lon, 144.96)

@@ -244,6 +244,36 @@ class WebappInspectFormTests(unittest.TestCase):
 
         self.assertIn("Enter a full company URL", html)
 
+    @patch("scout.research.discover_sitemap_pages", return_value=[])
+    def test_run_inspect_form_persists_a_coordinate_from_structured_data(self, _sitemap_discovery):
+        # /inspect mode never gets an OSM coordinate (it skips discovery
+        # entirely) - structured data on the company's own page is the only
+        # coordinate source available here. See scout/research.py:
+        # extract_structured_coordinates / analyse_company.
+        html = (
+            '<p>software platform</p>'
+            '<script type="application/ld+json">'
+            '{"geo": {"latitude": "-37.95", "longitude": "145.06"}}'
+            '</script>'
+        )
+        fake_fetch = lambda url: fetched(url, html) if url == "https://known.test" else FetchResult(url, error="not found")
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = str(Path(directory) / "test.db")
+
+            run_inspect_form(
+                domain="https://known.test",
+                roles_input="web developer",
+                fetch=fake_fetch,
+                output=str(Path(directory) / "report.md"),
+                db_path=db_path,
+            )
+
+            persisted = {company.domain: company for company in load_companies(db_path=db_path)}
+
+        self.assertEqual(persisted["https://known.test"].lat, -37.95)
+        self.assertEqual(persisted["https://known.test"].lon, 145.06)
+
 
 class MapViewTests(unittest.TestCase):
     def test_render_map_shows_pins_and_lists_unplotted(self):
