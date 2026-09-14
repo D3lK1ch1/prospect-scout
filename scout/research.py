@@ -679,6 +679,7 @@ def run_research(
     fetch: Fetch = fetch_page,
     profile: ResearchProfile | None = None,
     max_workers: int = 1,
+    coordinates: dict[str, tuple[float, float]] | None = None,
 ) -> ResearchReport:
     """Research each domain's own site. Companies are researched across up to
     max_workers in parallel; each company's own fetch sequence (homepage, then
@@ -686,9 +687,22 @@ def run_research(
     companies' sites, never bursts one target (see docs/KNOWN_GAPS.md #7).
     Default of 1 keeps the CLI's small supplied-domain-list path sequential
     and deterministic; the web app opts into a higher value.
+
+    `coordinates`, when passed (from OSM discovery - see
+    scout/osm_discovery.py:parse_to_domains), is applied onto each matching
+    CompanyResult by domain after research completes. A domain with no entry
+    stays at CompanyResult's default lat=lon=None - most callers (the CLI's
+    domain-list adapter, and the specific-company /inspect path) never pass
+    this at all, and that's an honest "no coordinate available", not a gap
+    in this function.
     """
     profile = profile or profile_by_id(request.profile)
     worker = functools.partial(analyse_company, request=request, fetch=fetch, profile=profile)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         companies = list(executor.map(worker, domains))
+    if coordinates:
+        for company in companies:
+            coord = coordinates.get(company.domain)
+            if coord is not None:
+                company.lat, company.lon = coord
     return ResearchReport(request=request, companies=companies)

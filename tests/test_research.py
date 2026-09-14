@@ -158,6 +158,22 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual([company.domain for company in report.companies], domains)
         self.assertTrue(all(company.location_verified for company in report.companies))
 
+    def test_run_research_applies_coordinates_by_domain_leaves_others_unset(self):
+        from scout.research import run_research
+
+        domains = ["https://acme.test", "https://noloc.test"]
+
+        def fake_fetch(url):
+            return fetched(url, "<p>Melbourne VIC Australia</p>") if url in domains else FetchResult(url, error="not found")
+
+        report = run_research(self.request, domains, fetch=fake_fetch, coordinates={"https://acme.test": (-37.8136, 144.9631)})
+
+        by_domain = {company.domain: company for company in report.companies}
+        self.assertEqual(by_domain["https://acme.test"].lat, -37.8136)
+        self.assertEqual(by_domain["https://acme.test"].lon, 144.9631)
+        self.assertIsNone(by_domain["https://noloc.test"].lat)
+        self.assertIsNone(by_domain["https://noloc.test"].lon)
+
     def test_technology_profile_covers_projects_and_portfolio_vocabulary(self):
         tech = next(profile for profile in load_profiles() if profile.id == "technology")
         self.assertIn("projects", tech.page_terms)
