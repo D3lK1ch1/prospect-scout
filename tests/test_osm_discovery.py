@@ -243,6 +243,46 @@ class ParseToDomainsTests(unittest.TestCase):
 
         self.assertEqual(parse_to_domains(elements), ["https://www.slv.vic.gov.au", "https://www.mcri.edu.au"])
 
+    def test_coordinates_out_param_captures_a_nodes_own_lat_lon(self):
+        elements = [
+            {"type": "node", "id": 1, "lat": -37.8136, "lon": 144.9631, "tags": {"name": "Acme", "website": "https://acme.test"}},
+        ]
+        coordinates: dict = {}
+
+        parse_to_domains(elements, coordinates=coordinates)
+
+        self.assertEqual(coordinates, {"https://acme.test": (-37.8136, 144.9631)})
+
+    def test_coordinates_out_param_captures_a_ways_center_centroid(self):
+        # `out center;` adds a `center` object to way/relation results (no
+        # single lat/lon of their own) - confirmed real shape, not a guess.
+        elements = [
+            {"type": "way", "id": 1, "center": {"lat": -37.81, "lon": 144.96}, "tags": {"name": "Acme", "website": "https://acme.test"}},
+        ]
+        coordinates: dict = {}
+
+        parse_to_domains(elements, coordinates=coordinates)
+
+        self.assertEqual(coordinates, {"https://acme.test": (-37.81, 144.96)})
+
+    def test_coordinates_out_param_skips_an_element_with_neither_lat_lon_nor_center(self):
+        elements = [
+            {"type": "node", "id": 1, "tags": {"name": "Acme", "website": "https://acme.test"}},
+        ]
+        coordinates: dict = {}
+
+        domains = parse_to_domains(elements, coordinates=coordinates)
+
+        self.assertEqual(domains, ["https://acme.test"])
+        self.assertEqual(coordinates, {})
+
+    def test_coordinates_param_omitted_behaves_exactly_as_before(self):
+        elements = [
+            {"type": "node", "id": 1, "lat": -37.8136, "lon": 144.9631, "tags": {"name": "Acme", "website": "https://acme.test"}},
+        ]
+
+        self.assertEqual(parse_to_domains(elements), ["https://acme.test"])
+
 
 class DiscoverDomainsTests(unittest.TestCase):
     @patch("scout.osm_discovery.query_overpass")
@@ -263,6 +303,19 @@ class DiscoverDomainsTests(unittest.TestCase):
 
         self.assertEqual(discover_domains("Nowhere", "XX", "Nowhereland"), [])
         query.assert_not_called()
+
+    @patch("scout.osm_discovery.query_overpass")
+    @patch("scout.osm_discovery.geocode_area")
+    def test_coordinates_out_param_passes_through_to_parse_to_domains(self, geocode, query):
+        geocode.return_value = BoundingBox(south=-37.825, west=144.95, north=-37.805, east=144.97)
+        query.return_value = [
+            {"type": "node", "id": 1, "lat": -37.8136, "lon": 144.9631, "tags": {"name": "Acme", "website": "https://acme.test"}},
+        ]
+        coordinates: dict = {}
+
+        discover_domains("Melbourne", "VIC", "Australia", "technology", coordinates=coordinates)
+
+        self.assertEqual(coordinates, {"https://acme.test": (-37.8136, 144.9631)})
 
 
 if __name__ == "__main__":

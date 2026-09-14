@@ -165,8 +165,32 @@ def query_overpass(bbox: BoundingBox, profile_id: str | None = None) -> list[dic
     return elements
 
 
-def parse_to_domains(elements: list[dict]) -> list[str]:
-    """Extract normalised, deduplicated domains from Overpass elements' website tags."""
+def _element_coordinate(element: dict) -> tuple[float, float] | None:
+    """A node's own lat/lon, or a way/relation's out-center centroid (this
+    module's `out center;` clause adds a `center` object to way/relation
+    results, since they have no single point of their own). None for a
+    malformed or unexpectedly-shaped element - never invented.
+    """
+    lat, lon = element.get("lat"), element.get("lon")
+    if lat is None or lon is None:
+        center = element.get("center")
+        if not isinstance(center, dict):
+            return None
+        lat, lon = center.get("lat"), center.get("lon")
+    try:
+        return (float(lat), float(lon)) if lat is not None and lon is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_to_domains(elements: list[dict], coordinates: dict[str, tuple[float, float]] | None = None) -> list[str]:
+    """Extract normalised, deduplicated domains from Overpass elements' website tags.
+
+    `coordinates`, when passed, is filled in-place: domain -> (lat, lon) for
+    each returned domain whose element carried a usable coordinate - an
+    out-parameter rather than a second return value, so existing callers
+    that only want the domain list are unaffected.
+    """
     found: list[str] = []
     seen: set[str] = set()
     for element in elements:
@@ -178,12 +202,16 @@ def parse_to_domains(elements: list[dict]) -> list[str]:
         if domain and domain not in seen:
             seen.add(domain)
             found.append(domain)
+            if coordinates is not None:
+                coord = _element_coordinate(element)
+                if coord is not None:
+                    coordinates[domain] = coord
     return found
 
 
-def discover_domains(city: str, state: str, country: str, profile_id: str | None = None) -> list[str]:
+def discover_domains(city: str, state: str, country: str, profile_id: str | None = None, coordinates: dict[str, tuple[float, float]] | None = None) -> list[str]:
     """Same output contract as research.read_domains(): a normalised domain list, from a location instead of a file."""
     bbox = geocode_area(city, state, country)
     if bbox is None:
         return []
-    return parse_to_domains(query_overpass(bbox, profile_id))
+    return parse_to_domains(query_overpass(bbox, profile_id), coordinates=coordinates)
