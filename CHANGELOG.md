@@ -3,6 +3,31 @@
 Notable changes to this project. Dated, not version-numbered — nothing's
 been tagged or released yet.
 
+## 2026-09-13 — Coordinates threaded from OSM discovery through to CompanyResult
+
+Third unit of the map/persistence feature.
+
+### Added
+
+- `scout/osm_discovery.py` — `parse_to_domains()`/`discover_domains()` gained
+  an optional `coordinates` out-parameter, filled in-place with domain ->
+  `(lat, lon)`. Handles both Overpass element shapes: a node's own `lat`/`lon`,
+  and a way/relation's `out center;` centroid (`element["center"]`). Existing
+  callers that don't pass it see zero behavior change - same return type,
+  same domains.
+- `scout/research.py:run_research()` gained an optional `coordinates` param
+  (domain -> `(lat, lon)`), applied onto each matching `CompanyResult` after
+  research completes. A domain with no entry keeps the default
+  `lat=lon=None` - the CLI's domain-list adapter and the specific-company
+  `/inspect` path never pass this at all, which is an honest "no coordinate
+  available", not a gap in this function.
+- `scout/webapp.py:run_research_form()` now builds a `coordinates` dict,
+  passes it to `discover()`, and forwards it to `run_research()` - so a real
+  web-app search actually populates `CompanyResult.lat`/`lon` end to end,
+  not just at the library level.
+
+174/174 tests pass.
+
 ## 2026-09-11 — Local persistence layer; dated-signal recency ranking 
 
 First two units of the map/persistence feature
