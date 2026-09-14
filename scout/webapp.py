@@ -15,6 +15,7 @@ profile_id as a parameter so it stays directly testable against any profile.
 from __future__ import annotations
 
 import html
+import json
 from collections.abc import Callable
 
 from fastapi import FastAPI, Form
@@ -28,6 +29,8 @@ from scout.profiles import profile_by_id
 from scout.ranking import rank_companies, rank_reason
 from scout.reporting import write_report
 from scout.research import analyse_company, run_research
+from scout.store import DEFAULT_DB_PATH as DEFAULT_STORE_PATH
+from scout.store import load_companies, save_report
 
 Fetch = Callable[[str], FetchResult]
 # Real signature also accepts a `coordinates` keyword (an out-parameter -
@@ -58,9 +61,15 @@ body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; 
 .limitations { color: #8a6d00; font-size: 0.9rem; }
 """
 
+_MAP_STYLE = _STYLE + """
+#map { height: 600px; border-radius: 8px; margin: 1rem 0; }
+.unmapped-list li { margin-bottom: 0.25rem; }
+"""
 
-_MODE_NAV = '<p><strong>Widespread search</strong> &middot; <a href="/inspect">Specific company</a></p>'
-_MODE_NAV_INSPECT = '<p><a href="/">Widespread search</a> &middot; <strong>Specific company</strong></p>'
+
+_MODE_NAV = '<p><strong>Widespread search</strong> &middot; <a href="/inspect">Specific company</a> &middot; <a href="/map">Map</a></p>'
+_MODE_NAV_INSPECT = '<p><a href="/">Widespread search</a> &middot; <strong>Specific company</strong> &middot; <a href="/map">Map</a></p>'
+_MODE_NAV_MAP = '<p><a href="/">Widespread search</a> &middot; <a href="/inspect">Specific company</a> &middot; <strong>Map</strong></p>'
 
 
 def render_form(error: str | None = None) -> str:
@@ -132,6 +141,83 @@ def _render_company_card(company: CompanyResult) -> str:
 </section>"""
 
 
+_LEAFLET_CSS = '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">'
+_LEAFLET_JS = '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
+
+# PINS_JSON is substituted via .replace(), not an f-string - the Leaflet JS
+# below has its own literal {braces} (tile URL template, style object) that
+# would otherwise have to be doubled throughout and would be easy to break.
+_MAP_SCRIPT_TEMPLATE = """<div id="map"></div>
+<script type="application/json" id="map-data">PINS_JSON</script>
+""" + _LEAFLET_CSS + "\n" + _LEAFLET_JS + """
+<script>
+  const pins = JSON.parse(document.getElementById('map-data').textContent);
+  const map = L.map('map');
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors',
+  }).addTo(map);
+  const markers = pins.map(p => L.marker([p.lat, p.lon]).bindPopup(
+    '<strong>' + p.name + '</strong><br>' + p.domain + '<br>' + p.status
+  ));
+  const group = L.featureGroup(markers).addTo(map);
+  map.fitBounds(group.getBounds(), { padding: [20, 20] });
+</script>
+"""
+
+
+def _render_unmapped(companies: list[CompanyResult]) -> str:
+    """Companies with no coordinate stay listed, never silently dropped -
+    same "record the limitation, don't hide the gap" convention as
+    company.limitations elsewhere in this app.
+    """
+    if not companies:
+        return ""
+    items = "".join(
+        f'<li>{html.escape(company.name)} '
+        f'(<a href="{html.escape(company.domain)}" target="_blank" rel="noopener noreferrer">{html.escape(company.domain)}</a>) '
+        f'&mdash; {html.escape(company.status)}</li>'
+        for company in companies
+    )
+    return f'<div class="unmapped-list"><h2>No coordinate available ({len(companies)})</h2><ul>{items}</ul></div>'
+
+
+def render_map(companies: list[CompanyResult]) -> str:
+    """All persisted companies (from scout/store.py), not just the last run -
+    this is the "rerunning always gets back the same map" view, so it reads
+    from the store, not from one request's in-memory report.
+    """
+    mapped = [company for company in companies if company.lat is not None and company.lon is not None]
+    unmapped = [company for company in companies if company.lat is None or company.lon is None]
+    unmapped_block = _render_unmapped(unmapped)
+
+    if not companies:
+        body = "<p>No companies persisted yet &mdash; run a search first.</p>"
+    elif not mapped:
+        body = f"<p>No persisted company has a coordinate yet.</p>{unmapped_block}"
+    else:
+        pins = [
+            {"lat": company.lat, "lon": company.lon, "name": company.name, "domain": company.domain, "status": company.status}
+            for company in mapped
+        ]
+        # Guards against a company name/domain containing "</script>" from
+        # breaking out of the embedding <script> tag - the JSON itself is
+        # still valid, < decodes back to "<" on JSON.parse().
+        pins_json = json.dumps(pins).replace("<", "\\u003c")
+        body = _MAP_SCRIPT_TEMPLATE.replace("PINS_JSON", pins_json) + unmapped_block
+
+    return f"""<!doctype html>
+<html>
+<head><title>Prospect Scout &mdash; map</title><style>{_MAP_STYLE}</style></head>
+<body>
+<h1>Map</h1>
+{_MODE_NAV_MAP}
+<p>{len(companies)} companies persisted &middot; {len(mapped)} with a known coordinate.</p>
+{body}
+</body>
+</html>"""
+
+
 def render_results(companies: list[CompanyResult], markdown_path, json_path) -> str:
     eligible = sum(company.status == "eligible" for company in companies)
     cards = "\n".join(_render_company_card(company) for company in companies) or "<p>No companies produced a result.</p>"
@@ -140,10 +226,11 @@ def render_results(companies: list[CompanyResult], markdown_path, json_path) -> 
 <head><title>Prospect Scout results</title><style>{_STYLE}</style></head>
 <body>
 <h1>Results</h1>
+<p><a href="/">Run another search</a> &middot; <a href="/map">View on map</a></p>
 <p>{len(companies)} companies checked, {eligible} eligible. Highest-priority companies are listed first — see "Why ranked here" on each.</p>
 {cards}
 <p>Full report also saved locally: {html.escape(str(markdown_path))} / {html.escape(str(json_path))}</p>
-<p><a href="/">Run another search</a></p>
+<p><a href="/">Run another search</a> &middot; <a href="/map">View on map</a></p>
 </body>
 </html>"""
 
@@ -159,6 +246,7 @@ def run_research_form(
     limit: int = DEFAULT_LIMIT,
     output: str = "reports/webapp-report.md",
     max_workers: int = WEB_CONCURRENCY,
+    db_path: str = DEFAULT_STORE_PATH,
 ) -> str:
     """Pure orchestration for one submitted form: validate, discover, research, rank, render.
 
@@ -181,6 +269,10 @@ def run_research_form(
         domains = domains[:limit]
 
     report = run_research(request, domains, fetch=fetch, profile=profile, max_workers=max_workers, coordinates=coordinates)
+    # Saved before ranking (ranking only reorders report.companies for
+    # display, it doesn't change any persisted field) so the store reflects
+    # this run even if rendering below were to fail.
+    save_report(report, db_path=db_path)
     report.companies = rank_companies(report.companies)
     markdown_path, json_path = write_report(report, output)
     return render_results(report.companies, markdown_path, json_path)
@@ -192,6 +284,7 @@ def run_inspect_form(
     profile_id: str = "technology",
     fetch: Fetch = fetch_page,
     output: str = "reports/webapp-inspect-report.md",
+    db_path: str = DEFAULT_STORE_PATH,
 ) -> str:
     """Pure orchestration for one submitted specific-company form: no OSM
     discovery, no location check - straight to analyse_company() on the one
@@ -210,7 +303,9 @@ def run_inspect_form(
         return render_inspect_form(error=str(exc))
 
     company = analyse_company(domain, request, fetch=fetch, profile=profile)
-    markdown_path, json_path = write_report(ResearchReport(request=request, companies=[company]), output)
+    report = ResearchReport(request=request, companies=[company])
+    save_report(report, db_path=db_path)
+    markdown_path, json_path = write_report(report, output)
     return render_results([company], markdown_path, json_path)
 
 
@@ -240,3 +335,8 @@ def inspect(
     roles: str = Form(""),
 ) -> str:
     return run_inspect_form(domain, roles)
+
+
+@app.get("/map", response_class=HTMLResponse)
+def map_view() -> str:
+    return render_map(load_companies())

@@ -3,6 +3,59 @@
 Notable changes to this project. Dated, not version-numbered — nothing's
 been tagged or released yet.
 
+## 2026-09-14 — Fixed: no way to reach the map from the results page
+
+Found via real use, same day the map shipped: `render_results()` (the page
+every search actually lands on) never included the nav bar at all - only
+`render_form()`/`render_inspect_form()`/`render_map()` got the "Map" link.
+A real search left no route to `/map` from the page you're actually on
+after running one; only reachable by going back to `/` first and noticing
+the nav link there. Added explicit "View on map" links to the results page
+(top and bottom), with regression tests asserting `href="/map"` is present
+in both the widespread-search and specific-company results output, so this
+can't silently regress again.
+
+180/180 tests pass.
+
+## 2026-09-14 — Map view; the web app now actually persists what it researches
+
+Fourth unit of the map/persistence feature. First unit where scout/store.py
+is actually wired into a live request instead of only existing as a library.
+
+### Added
+
+- `scout/webapp.py:run_research_form()`/`run_inspect_form()` now call
+  `save_report()` after research completes, so every real web-app search -
+  widespread or specific-company - persists to the local store, not just
+  the per-run Markdown/JSON report. Both gained a `db_path` parameter
+  (defaults to `scout/store.py`'s `DEFAULT_DB_PATH`) for testability,
+  matching the existing `output`/`fetch`/`discover` injectable-param
+  pattern already used here.
+- New `/map` route and `render_map()`: reads every persisted company (not
+  just the last run - the whole point of persistence), plots the ones with
+  a coordinate as pins on a Leaflet map (OSM tiles, no API key, no paid
+  provider), and lists the rest separately with an explicit "no coordinate
+  available" count rather than silently dropping them - same convention as
+  `company.limitations` elsewhere in this app. Reachable from every page's
+  nav, alongside the widespread/specific-company links.
+- Company data is embedded in the page as a `<script type="application/json">`
+  block, not inlined into JS - the safer of the two standard ways to pass
+  server data into a page's script, and additionally `<`-escaped in the
+  JSON to close off a `</script>`-breakout edge case, even though nothing
+  in the data today (a plain hostname `name`) is expected to trigger it.
+
+### Fixed (caught during this unit's own testing, before commit)
+
+- A first draft of `test_map_route_is_reachable` hit `/map` without
+  pointing `load_companies()` at a temp database, which silently created a
+  real (if empty, gitignored, zero-row) `reports/prospect_scout.db` as a
+  side effect of the route's default path. Caught by checking the working
+  tree after the test run, not by the tests themselves - fixed to patch
+  `scout.webapp.load_companies` the same way every other map test already
+  did, and the stray file was removed.
+
+180/180 tests pass.
+
 ## 2026-09-13 — Coordinates threaded from OSM discovery through to CompanyResult
 
 Third unit of the map/persistence feature.
