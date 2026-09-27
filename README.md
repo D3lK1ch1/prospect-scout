@@ -2,7 +2,15 @@
 
 A private, locally run research aid for finding evidence-backed company prospects and suggesting technical work worth investigating. Results stay local and the tool never contacts companies.
 
-**Current status:** three ways to run a search.
+## Status: on hiatus (since 2026-09-26)
+
+Everything below works and all tests pass as of the last commit — the project is paused, not broken. It's paused because of what using it actually showed: finding and verifying small-to-mid-sized companies from public evidence failed more often than plain word of mouth. The companies this project most wanted to surface are often the ones that hire through referrals and conversations, leaving no public text for any tool to find. That's a ceiling on public-evidence discovery itself, not a bug a better data source would fix.
+
+**Picking it back up:** start from the latest `CHANGELOG.md` entry, then the local-only notes (gitignored, so only on the original machine): `docs/SESSION_NOTE_1.md` for the last session's state, `docs/KNOWN_GAPS.md` for the open limitations (#17 is the one above), and `docs/ABR_DISCOVERY_SPEC.md` for the one paused next step — an Australian Business Register adapter that *verifies* a company name you already have (e.g. from networking), rather than discovering new ones. It's waiting on a register-or-not decision, nothing else.
+
+## What it does
+
+Three ways to run a search.
 
 - **Web app, widespread search** (`scout/webapp.py`, `/`) — give it a city, state, country, and optional role terms; it finds candidate companies itself via OpenStreetMap (geocode the location, then query nearby offices, libraries, and research institutes), scans each one's own sitemap for case-study/blog/career pages (falling back to scanning the homepage's own links if no sitemap exists), and shows full results in the browser — every finding's evidence, source link, confidence, and suggestion, ranked highest-priority first with the reasons why. No domain list required. Scoped to the technology profile only, to keep this entry point focused. Researches up to 250 candidates per run, across companies concurrently (each individual company is still fetched politely/sequentially) so a wide run finishes in minutes rather than tens of minutes.
 - **Web app, specific company** (`scout/webapp.py`, `/inspect`) — already know the company you want to check? Paste its URL directly and skip discovery and the location check entirely. Runs the exact same evidence pipeline as the widespread search (same finding types, same depth) against that one domain — it's not a lighter version, just a different way to choose who gets scanned.
@@ -12,7 +20,7 @@ All three paths share the same scanning logic: career-page role matching, sector
 
 **Web-app searches also persist locally, and can be viewed on a map.** Every widespread or specific-company search run through the web app is saved to a local SQLite store (`reports/prospect_scout.db`) — rerunning a search replaces a domain's prior entry rather than piling up duplicates, so the store always reflects your latest research, not just your latest run. A **map view** (`/map`, linked from every web-app page) plots every persisted company that has a known coordinate on an OpenStreetMap-tiled map, and lists the rest underneath rather than dropping them. Coordinates come from OpenStreetMap during widespread-search discovery, or from a company's own schema.org structured data when using specific-company mode — not always present on the company's own page, a genuine and expected gap rather than a bug. The command-line path doesn't persist to this store or get coordinates at all; the map only ever reflects web-app research.
 
-**Known limitation, worth reading before relying on the web app's widespread search:** OpenStreetMap doesn't have every company mapped — it's confirmed to miss real, currently-hiring businesses, including some large ones. It's a genuinely useful *widening* of what you'd find by hand, not a guarantee of completeness. A second discovery adapter (Australian Business Register data) is in design to help close that gap.
+**Known limitation, worth reading before relying on the web app's widespread search:** OpenStreetMap doesn't have every company mapped — it's confirmed to miss real, currently-hiring businesses, including some large ones. It's a genuinely useful *widening* of what you'd find by hand, not a guarantee of completeness. No second discovery source was built — see the hiatus note above for why.
 
 The narrowed product boundary, evidence rules, delivery slices, and acceptance criteria are in [docs/MVP_SPEC.md](docs/MVP_SPEC.md).
 

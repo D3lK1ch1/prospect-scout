@@ -3,6 +3,25 @@
 Notable changes to this project. Dated, not version-numbered — nothing's
 been tagged or released yet.
 
+## 2026-09-26 — Paused; docs corrected before the break
+
+Project put on hiatus. Reason, recorded in `README.md`'s status section:
+finding and verifying small-to-mid-sized companies from public evidence
+failed more often than word of mouth did — the same permanent ceiling
+`docs/KNOWN_GAPS.md` #17 already names. 191/191 tests pass at this point.
+
+### Fixed
+
+- `README.md` — added a hiatus/pick-up-here section; removed the claim that
+  an Australian Business Register discovery adapter was "in design." Its
+  spec was redesigned in 2026-08 into a *verification*-only adapter and then
+  paused before any code was written.
+- Corrected the 2026-08-11 entry below: `scout/ats_discovery.py` and
+  `tests/test_ats_discovery.py` were never committed. No commit on any branch
+  contains either file, and neither exists in the working tree — the entry
+  described work that didn't survive. Left in place with a note rather than
+  deleted, so the history stays honest.
+
 ## 2026-09-14 — Structured-data coordinates for /inspect mode (fifth and final map/persistence unit)
 
 Closes the last gap from the map/persistence plan: `/inspect` (specific-
@@ -292,6 +311,10 @@ First two units of the map/persistence feature
   (asserts non-technology profile labels are absent from the index page).
 
 ## 2026-08-11 — ATS job-board lookup adapter (built, deliberately left unwired)
+
+> **Correction (2026-09-26):** these two files were never committed and no
+> longer exist — see the 2026-09-26 entry. The decision recorded below still
+> stands; the code behind it doesn't.
 
 ### Added
 
